@@ -20,7 +20,20 @@
       </ul>
     </nav>
 
-    <main class="main-content">
+    <main class="app-main-shell">
+      <header class="app-topbar">
+        <div class="app-topbar-right">
+          <button class="topbar-icon-btn" type="button" aria-label="Уведомления">
+            🔔
+          </button>
+          <button id="theme-toggle-btn" class="theme-toggle" type="button" aria-label="Переключить тему">
+            <span class="theme-toggle-icon" aria-hidden="true">🌙</span>
+            <span class="theme-toggle-label">Тёмная тема</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="main-content">
       <!-- Раздел: Поля и культуры (первый реальный экран) -->
       <section class="page-section" data-section="fields">
         <header class="header-area">
@@ -225,6 +238,7 @@
           В дальнейшем сюда перенесём управление пользователями, интеграциями, уведомлениями и безопасностью.
         </p>
       </section>
+      </div>
     </main>
   </div>
 

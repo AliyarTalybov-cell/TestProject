@@ -11,14 +11,14 @@ import WeatherPage from '@/pages/WeatherPage.vue'
 
 export const routes = [
   { path: '/', redirect: '/dashboard' },
-  { path: '/login', name: 'login', component: LoginPage },
-  { path: '/dashboard', name: 'dashboard', component: DashboardPage },
-  { path: '/weather', name: 'weather', component: WeatherPage },
-  { path: '/fields', name: 'fields', component: FieldsPage },
-  { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true },
-  { path: '/tasks', name: 'tasks', component: TasksPage },
-  { path: '/mechanic', name: 'mechanic', component: MechanicPage },
-  { path: '/reports', name: 'reports', component: ReportsPage },
+  { path: '/login', name: 'login', component: LoginPage, meta: { title: 'Вход' } },
+  { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { title: 'Обзор' } },
+  { path: '/weather', name: 'weather', component: WeatherPage, meta: { title: 'Погода и условия' } },
+  { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля' } },
+  { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
+  { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },
+  { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },
+  { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Отчеты' } },
 ] as const
 
 export const router = createRouter({

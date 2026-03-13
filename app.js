@@ -1,5 +1,51 @@
 import { fetchWeather, getWeatherIconUrl } from "./weather-api.js";
 
+// ——— Тема (светлая как на макете / тёмная старая) ———
+const THEME_STORAGE_KEY = "agro_ctrl:theme";
+
+function getStoredTheme() {
+  if (typeof window === "undefined") return "light";
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return stored === "dark" || stored === "light" ? stored : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
+function initThemeToggle() {
+  const btn = document.getElementById("theme-toggle-btn");
+  const initial = getStoredTheme();
+  applyTheme(initial);
+
+  if (!btn) return;
+
+  function syncLabel() {
+    const theme = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+    const iconEl = btn.querySelector(".theme-toggle-icon");
+    const labelEl = btn.querySelector(".theme-toggle-label");
+    if (!iconEl || !labelEl) return;
+
+    if (theme === "dark") {
+      iconEl.textContent = "☀️";
+      labelEl.textContent = "Светлая тема";
+    } else {
+      iconEl.textContent = "🌙";
+      labelEl.textContent = "Тёмная тема";
+    }
+  }
+
+  syncLabel();
+
+  btn.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+    const next = current === "dark" ? "light" : "dark";
+    applyTheme(next);
+    window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    syncLabel();
+  });
+}
+
 const fields = [
   {
     id: "field-5",
@@ -670,6 +716,7 @@ function initWeatherSection() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  initThemeToggle();
   initNavigation();
   initFieldsSection();
   initWeatherSection();
