@@ -1,3 +1,5 @@
+import { fetchWeather, getWeatherIconUrl } from "./weather-api.js";
+
 const fields = [
   {
     id: "field-5",
@@ -388,8 +390,289 @@ function initFieldsSection() {
   }
 }
 
+// ——— Погода: состояние и отрисовка ———
+let weatherData = null;
+const DEFAULT_WEATHER_CITY = "Kursk";
+const DEFAULT_WEATHER_COUNTRY = "ru";
+
+function formatWeatherTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms * 1000);
+  return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+
+function renderWeatherCompact(data) {
+  const loading = $("#weather-compact-loading");
+  const content = $("#weather-compact-content");
+  const err = $("#weather-compact-error");
+  if (!loading || !content || !err) return;
+
+  if (!data) {
+    loading.hidden = true;
+    content.hidden = true;
+    err.hidden = false;
+    return;
+  }
+
+  loading.hidden = true;
+  err.hidden = true;
+  content.hidden = false;
+
+  const windSpeed = data.windSpeed != null ? data.windSpeed : 0;
+  const windClass = windSpeed > 10 ? "weather-extreme" : windSpeed > 5 ? "weather-wind-warning" : "";
+  const temp = data.temp != null ? data.temp : "—";
+  const tempExtreme = temp !== "—" && (temp < -15 || temp > 35);
+  const tempClass = tempExtreme ? "weather-extreme" : "";
+
+  content.innerHTML = `
+    <span class="weather-compact-city">${escapeHtml(data.cityName)}</span>
+    <span class="weather-compact-temp ${tempClass}">${temp}°C</span>
+    <img class="weather-compact-icon" src="${getWeatherIconUrl(data.icon)}" alt="" />
+    <div>
+      <div class="weather-compact-desc">${escapeHtml(data.description)}</div>
+      <div class="weather-compact-feels">Ощущается как ${data.feelsLike != null ? data.feelsLike : "—"}°C</div>
+      <div class="weather-compact-meta">
+        <span>Влажность: ${data.humidity != null ? data.humidity + "%" : "—"}</span>
+        <span class="${windClass}">Ветер: ${windSpeed !== null && windSpeed !== undefined ? windSpeed + " м/с" : "—"}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderWeatherDetail(data) {
+  const loading = $("#weather-detail-loading");
+  const err = $("#weather-detail-error");
+  const content = $("#weather-detail-content");
+  const currentBlock = $("#weather-current-block");
+  const paramsGrid = $("#weather-params-grid");
+  const cropsList = $("#weather-crops-list");
+  const fieldsList = $("#weather-fields-list");
+  if (!content || !currentBlock || !paramsGrid || !cropsList || !fieldsList) return;
+
+  if (!data) {
+    if (loading) loading.hidden = true;
+    if (err) err.hidden = false;
+    content.hidden = true;
+    return;
+  }
+
+  if (loading) loading.hidden = true;
+  if (err) err.hidden = true;
+  content.hidden = false;
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  const timeStr = now.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const windSpeed = data.windSpeed != null ? data.windSpeed : 0;
+  const windStrong = windSpeed > 5;
+  const windExtreme = windSpeed > 10;
+  const temp = data.temp != null ? data.temp : null;
+  const tempExtreme = temp !== null && (temp < -15 || temp > 35);
+
+  const updatedAt = now.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  currentBlock.innerHTML = `
+    <div class="weather-current-main">
+      <div class="weather-current-city">${escapeHtml(data.cityName)}</div>
+      <div class="weather-current-datetime">Данные OpenWeatherMap · Обновлено ${updatedAt}</div>
+      <div class="weather-current-datetime">${dateStr}, ${timeStr}</div>
+      <div class="weather-current-temp-wrap">
+        <span class="weather-current-temp ${tempExtreme ? "weather-extreme" : ""}">${temp != null ? temp : "—"}°C</span>
+        <img class="weather-current-icon" src="${getWeatherIconUrl(data.icon)}" alt="" />
+      </div>
+      <div class="weather-current-desc">${escapeHtml(data.description)}</div>
+      <div class="weather-current-feels">Ощущается как ${data.feelsLike != null ? data.feelsLike : "—"}°C</div>
+      <div class="weather-current-extra">
+        <span>Давление ${data.pressure != null ? data.pressure + " гПа" : "—"}</span>
+        <span>Видимость ${data.visibility != null ? (data.visibility / 1000) + " км" : "—"}</span>
+        <span>Облачность ${data.clouds != null ? data.clouds + "%" : "—"}</span>
+      </div>
+    </div>
+    <div class="weather-current-coords">
+      <span class="weather-param-label">Координаты</span>
+      <div class="weather-param-value">Широта: ${data.coord?.lat != null ? data.coord.lat.toFixed(2) + "°" : "—"}, Долгота: ${data.coord?.lon != null ? data.coord.lon.toFixed(2) + "°" : "—"}</div>
+    </div>
+  `;
+
+  paramsGrid.innerHTML = `
+    <div class="weather-param-card">
+      <div class="weather-param-label">Ветер</div>
+      <div class="weather-param-value ${windExtreme ? "weather-extreme" : windStrong ? "weather-wind-warning" : ""}">${windSpeed !== null && windSpeed !== undefined ? windSpeed + " м/с" : "—"} ${data.windDirection ? data.windDirection : ""}</div>
+    </div>
+    <div class="weather-param-card">
+      <div class="weather-param-label">Направление ветра</div>
+      <div class="weather-param-value">${data.windDeg != null ? data.windDeg + "°" : "—"} ${escapeHtml(data.windDirection || "")}</div>
+    </div>
+    <div class="weather-param-card">
+      <div class="weather-param-label">Влажность</div>
+      <div class="weather-param-value">${data.humidity != null ? data.humidity + "%" : "—"}</div>
+    </div>
+    <div class="weather-param-card">
+      <div class="weather-param-label">Давление (уровень моря)</div>
+      <div class="weather-param-value">${data.seaLevel != null ? data.seaLevel + " гПа" : data.pressure != null ? data.pressure + " гПа" : "—"}</div>
+    </div>
+    <div class="weather-param-card">
+      <div class="weather-param-label">Давление (у земли)</div>
+      <div class="weather-param-value">${data.grndLevel != null ? data.grndLevel + " гПа" : "—"}</div>
+    </div>
+    <div class="weather-param-card">
+      <div class="weather-param-label">Восход / закат</div>
+      <div class="weather-param-value">${data.sunrise || "—"} — ${data.sunset || "—"}</div>
+    </div>
+    <div class="weather-param-card">
+      <div class="weather-param-label">Координаты</div>
+      <div class="weather-param-value">${data.coord?.lat != null ? data.coord.lat.toFixed(2) + "°" : "—"} ${data.coord?.lon != null ? data.coord.lon.toFixed(2) + "°" : ""}</div>
+    </div>
+  `;
+
+  const recommendations = getCropRecommendations(data);
+  cropsList.innerHTML = recommendations
+    .map(
+      (r) => `
+    <div class="weather-crop-item">
+      <div class="weather-crop-icon ${r.key}">${r.icon}</div>
+      <div>
+        <div class="type-value">${escapeHtml(r.name)}</div>
+        <span class="weather-crop-status ${r.statusClass}">${escapeHtml(r.status)}</span>
+        <p class="weather-crop-desc" style="margin:8px 0 0 0;font-size:0.85rem;color:var(--text-secondary);">${escapeHtml(r.text)}</p>
+      </div>
+    </div>
+  `
+    )
+    .join("");
+
+  const fieldWeatherList = getFieldsWithMiniWeather(data);
+  fieldsList.innerHTML = fieldWeatherList
+    .map(
+      (f) => `
+    <div class="weather-field-mini">
+      <div>
+        <div class="weather-field-mini-name">${escapeHtml(f.name)}</div>
+        <div class="weather-field-mini-crop">${escapeHtml(f.cropName)}</div>
+      </div>
+      <div class="weather-field-mini-weather">
+        <img src="${getWeatherIconUrl(data.icon)}" alt="" width="28" height="28" />
+        <span class="weather-field-mini-temp">${f.temp}°C</span>
+        <span class="weather-field-mini-wind ${f.windStrong ? "wind-strong" : ""}">Ветер ${f.wind} м/с</span>
+      </div>
+    </div>
+  `
+    )
+    .join("");
+}
+
+function getCropRecommendations(data) {
+  const temp = data.temp != null ? data.temp : 15;
+  const wind = data.windSpeed != null ? data.windSpeed : 0;
+  const humidity = data.humidity != null ? data.humidity : 50;
+
+  return [
+    {
+      key: "wheat",
+      name: "Пшеница озимая",
+      icon: "🌾",
+      statusClass: temp >= 0 && temp <= 25 && wind < 10 ? "ok" : temp < -5 ? "risk" : "warn",
+      status: temp >= 0 && temp <= 25 && wind < 10 ? "Комфортно" : temp < -5 ? "Риск" : "Ожидание",
+      text:
+        temp >= 0 && temp <= 25 && wind < 10
+          ? "Температурный режим оптимален. Рекомендуется плановый осмотр всходов."
+          : temp < -5
+          ? "Возможны морозы. Контроль состояния озимых."
+          : "Температура на границе нормы. Отложите внесение удобрений при ветре >5 м/с.",
+    },
+    {
+      key: "sunflower",
+      name: "Подсолнечник",
+      icon: "🌻",
+      statusClass: temp >= 10 && temp <= 28 ? "ok" : temp < 8 ? "warn" : "risk",
+      status: temp >= 10 && temp <= 28 ? "Комфортно" : temp < 8 ? "Ожидание" : "Риск заморозков",
+      text:
+        temp >= 10 && temp <= 28
+          ? "Условия благоприятны для посева и вегетации."
+          : temp < 8
+          ? "Почва недостаточно прогрета. Ожидайте повышения ночных температур."
+          : "Риск ночных заморозков. Отложите посев.",
+    },
+    {
+      key: "corn",
+      name: "Кукуруза",
+      icon: "🌽",
+      statusClass: temp >= 10 && wind < 8 ? "ok" : temp < 8 ? "warn" : "risk",
+      status: temp >= 10 && wind < 8 ? "Подготовка" : temp < 8 ? "Ожидание" : "Риск",
+      text:
+        temp >= 10 && wind < 8
+          ? "Условия благоприятны для подготовки техники к началу посевной кампании."
+          : temp < 8
+          ? "Ожидается ночное понижение температуры. Риск повреждения всходов возвратными заморозками."
+          : "Сильный ветер. Не рекомендуется опрыскивание.",
+    },
+  ];
+}
+
+function getFieldsWithMiniWeather(data) {
+  const temp = data.temp != null ? data.temp : 0;
+  const wind = data.windSpeed != null ? data.windSpeed : 0;
+  return fields.map((f, i) => {
+    const offset = (i % 3) - 1;
+    return {
+      name: f.name,
+      cropName: f.cropName,
+      temp: temp + offset,
+      wind: Math.min(15, Math.max(0, wind + (i % 2))),
+      windStrong: wind + (i % 2) > 5,
+    };
+  });
+}
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function loadWeather(city, country) {
+  const loadingCompact = $("#weather-compact-loading");
+  const loadingDetail = $("#weather-detail-loading");
+  if (loadingCompact) loadingCompact.hidden = false;
+  if (loadingDetail) loadingDetail.hidden = false;
+  $("#weather-compact-error")?.setAttribute("hidden", "");
+  $("#weather-detail-error")?.setAttribute("hidden", "");
+  $("#weather-compact-content")?.setAttribute("hidden", "");
+
+  fetchWeather(city, country).then((data) => {
+    weatherData = data;
+    if (loadingCompact) loadingCompact.hidden = true;
+    if (loadingDetail) loadingDetail.hidden = true;
+    renderWeatherCompact(data);
+    renderWeatherDetail(data);
+    if (!data) {
+      $("#weather-compact-error")?.removeAttribute("hidden");
+      $("#weather-detail-error")?.removeAttribute("hidden");
+    }
+  });
+}
+
+function initWeatherSection() {
+  const citySelect = $("#weather-city-select");
+  const refreshBtn = $("#weather-refresh-btn");
+  if (citySelect) {
+    citySelect.addEventListener("change", () => {
+      const [city, country] = citySelect.value.split(",");
+      loadWeather(city, country);
+    });
+  }
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      const [city, country] = (citySelect?.value || "Kursk,ru").split(",");
+      loadWeather(city, country);
+    });
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   initNavigation();
   initFieldsSection();
+  initWeatherSection();
+  loadWeather(DEFAULT_WEATHER_CITY, DEFAULT_WEATHER_COUNTRY);
 });
 

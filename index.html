@@ -12,6 +12,7 @@
       <div class="logo type-label">A G R O _ C T R L</div>
       <ul class="nav-menu">
         <li><button class="nav-item" data-section="dashboard" type="button">Дашборд</button></li>
+        <li><button class="nav-item" data-section="weather" type="button">Погода</button></li>
         <li><button class="nav-item active" data-section="fields" type="button">Поля и культуры</button></li>
         <li><button class="nav-item" data-section="journal" type="button">Журнал работ</button></li>
         <li><button class="nav-item" data-section="reports" type="button">Отчеты</button></li>
@@ -131,17 +132,62 @@
         </section>
       </section>
 
-      <!-- Заглушки других разделов (чтобы навигация уже была логичной) -->
-      <section class="page-section page-section-muted" data-section="dashboard" hidden>
+      <!-- Дашборд: компактный виджет погоды вверху -->
+      <section class="page-section" data-section="dashboard" hidden>
         <header class="header-area">
           <div>
-            <div class="type-label mb-1">Раздел в разработке</div>
+            <div class="type-label mb-1">Текущий раздел</div>
             <h1 class="page-title">Дашборд</h1>
           </div>
         </header>
-        <p class="placeholder-text">
-          Здесь позже появится сводный мониторинг по всем модулям: технике, полям, погоде и работе бригад.
+        <div class="weather-widget-compact" id="weather-widget-compact" aria-live="polite">
+          <div class="weather-compact-loading" id="weather-compact-loading">Загрузка погоды…</div>
+          <div class="weather-compact-content" id="weather-compact-content" hidden></div>
+          <div class="weather-compact-error" id="weather-compact-error" hidden>Не удалось загрузить погоду</div>
+        </div>
+        <p class="placeholder-text mt-2">
+          Здесь позже появится сводный мониторинг по всем модулям: технике, полям и работе бригад.
         </p>
+      </section>
+
+      <!-- Детальная вкладка «Погода» -->
+      <section class="page-section" data-section="weather" hidden>
+        <header class="header-area header-weather">
+          <div>
+            <div class="type-label mb-1">Текущий раздел</div>
+            <h1 class="page-title">Погода</h1>
+          </div>
+          <div class="weather-header-actions">
+            <select class="weather-city-select" id="weather-city-select" aria-label="Выбор города">
+              <option value="Kursk,ru">Курск</option>
+              <option value="Krasnodar,ru">Краснодар</option>
+              <option value="Rostov-on-Don,ru">Ростов-на-Дону</option>
+            </select>
+            <button type="button" class="btn btn-ghost" id="weather-refresh-btn" aria-label="Обновить">Обновить</button>
+          </div>
+        </header>
+
+        <div class="weather-detail" id="weather-detail">
+          <div class="weather-detail-loading" id="weather-detail-loading">Загрузка погоды…</div>
+          <div class="weather-detail-error" id="weather-detail-error" hidden>Не удалось загрузить погоду</div>
+          <div class="weather-detail-content" id="weather-detail-content" hidden>
+            <!-- Текущая погода (крупный блок) -->
+            <div class="weather-current-block card-rounded" id="weather-current-block"></div>
+            <!-- Сетка параметров -->
+            <div class="weather-params-grid" id="weather-params-grid"></div>
+            <!-- Рекомендации по культурам -->
+            <div class="weather-recommendations card-rounded">
+              <h2 class="weather-block-title">Рекомендации по культурам на сегодня</h2>
+              <p class="weather-block-subtitle">Анализ текущих погодных условий для основных посевов.</p>
+              <div class="weather-crops-list" id="weather-crops-list"></div>
+            </div>
+            <!-- Поля с мини-погодой -->
+            <div class="weather-fields-block card-rounded">
+              <h2 class="weather-block-title">Состояние полей</h2>
+              <div class="weather-fields-list" id="weather-fields-list"></div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="page-section page-section-muted" data-section="journal" hidden>

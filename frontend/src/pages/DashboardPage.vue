@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 type DateRangeKey = 'today' | 'week' | 'month'
 type DowntimeCategory = 'breakdown' | 'rain' | 'fuel' | 'waiting'
@@ -140,12 +141,11 @@ const topReasonLabel = computed(() => {
   filteredEvents.value.forEach((e) => {
     counts.set(e.reason, (counts.get(e.reason) ?? 0) + e.durationMinutes)
   })
-  let top: { reason: string; minutes: number } | null = null
-  counts.forEach((minutes, reason) => {
-    if (!top || minutes > top.minutes) {
-      top = { reason, minutes }
-    }
-  })
+  const entries = Array.from(counts.entries())
+  const top = entries.reduce<{ reason: string; minutes: number } | null>(
+    (acc, [reason, minutes]) => (!acc || minutes > acc.minutes ? { reason, minutes } : acc),
+    null,
+  )
   return top?.reason ?? '—'
 })
 
@@ -204,6 +204,8 @@ const donutStyle = computed(() => {
         <h1 class="page-title">Дашборд простоев техники</h1>
       </div>
     </header>
+
+    <WeatherWidgetCompact />
 
     <div class="metrics-row">
       <article class="metric-card">

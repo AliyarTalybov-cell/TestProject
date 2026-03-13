@@ -7,11 +7,13 @@ import LoginPage from '@/pages/LoginPage.vue'
 import ReportsPage from '@/pages/ReportsPage.vue'
 import TasksPage from '@/pages/TasksPage.vue'
 import MechanicPage from '@/pages/MechanicPage.vue'
+import WeatherPage from '@/pages/WeatherPage.vue'
 
 export const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/login', name: 'login', component: LoginPage },
   { path: '/dashboard', name: 'dashboard', component: DashboardPage },
+  { path: '/weather', name: 'weather', component: WeatherPage },
   { path: '/fields', name: 'fields', component: FieldsPage },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true },
   { path: '/tasks', name: 'tasks', component: TasksPage },
