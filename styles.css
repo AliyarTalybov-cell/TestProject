@@ -1,10 +1,10 @@
 :root {
-  --bg-base: #0a1208;
-  --bg-panel: rgba(20, 35, 15, 0.6);
-  --bg-panel-hover: rgba(30, 50, 22, 0.8);
-  --border-color: rgba(255, 255, 255, 0.15);
-  --text-primary: #ffffff;
-  --text-secondary: rgba(255, 255, 255, 0.55);
+  --bg-base: #141c1a;
+  --bg-panel: rgba(32, 50, 40, 0.92);
+  --bg-panel-hover: rgba(45, 68, 52, 0.96);
+  --border-color: rgba(255, 255, 255, 0.12);
+  --text-primary: #f4f6f5;
+  --text-secondary: rgba(209, 213, 211, 0.82);
   --accent-green: #68ad33;
   --accent-green-hover: #7bce3c;
   --danger-red: #d33c3c;
@@ -42,8 +42,8 @@ body {
   display: flex;
   overflow: hidden;
   background-image:
-    radial-gradient(circle at 50% 0%, #162611 0%, transparent 70%),
-    linear-gradient(to bottom, transparent, #050a04);
+    radial-gradient(circle at 50% 0%, #243d2a 0%, transparent 65%),
+    linear-gradient(to bottom, rgba(12, 18, 14, 0.5), #0a0f0d);
   font-size: 14px;
   line-height: 1.4;
 }

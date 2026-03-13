@@ -13,7 +13,7 @@ const isAuthLayout = computed(() => route.name === 'login')
 
   <div v-else class="app-layout">
     <aside class="sidebar">
-      <div class="logo type-label">A G R O _ C T R L</div>
+      <div class="logo type-label">А Г Р О – К О Н Т Р О Л Ь</div>
       <ul class="nav-menu">
         <li><RouterLink class="nav-item" to="/dashboard">Дашборд</RouterLink></li>
         <li><RouterLink class="nav-item" to="/fields">Поля и культуры</RouterLink></li>

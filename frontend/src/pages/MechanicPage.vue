@@ -13,15 +13,21 @@ type MechanicField = {
 
 const active = ref<ActiveDowntime | null>(loadActive())
 const isReasonsOpen = ref(false)
+const isStartedModalOpen = ref(false)
+const isFinishedModalOpen = ref(false)
+const isAddFieldOpen = ref(false)
 
-const fields: MechanicField[] = [
+const newFieldName = ref('')
+const newFieldOperation = ref('')
+
+const fields = ref<MechanicField[]>([
   { id: 'field-5', name: 'Поле #5', operation: 'Пахота' },
   { id: 'field-12', name: 'Поле #12', operation: 'Посев' },
   { id: 'field-3', name: 'Поле #3', operation: 'Опрыскивание' },
   { id: 'field-8', name: 'Поле #8', operation: 'Уборка' },
-]
+])
 
-const currentFieldId = ref<string | null>(active.value?.fieldId ?? fields[0]?.id ?? null)
+const currentFieldId = ref<string | null>(active.value?.fieldId ?? fields.value[0]?.id ?? null)
 
 const reasons: Array<{ label: string; description: string; category: DowntimeCategory }> = [
   { label: 'Поломка техники', description: 'Неисправность, требующая остановки работы', category: 'breakdown' },
@@ -32,10 +38,10 @@ const reasons: Array<{ label: string; description: string; category: DowntimeCat
 
 const currentField = computed<MechanicField | null>(() => {
   if (active.value?.fieldId) {
-    const fromActive = fields.find((f) => f.id === active.value?.fieldId)
+    const fromActive = fields.value.find((f) => f.id === active.value?.fieldId)
     if (fromActive) return fromActive
   }
-  return fields.find((f) => f.id === currentFieldId.value) ?? null
+  return fields.value.find((f) => f.id === currentFieldId.value) ?? null
 })
 
 const statusText = computed(() => {
@@ -64,6 +70,7 @@ function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   }
   saveActive(active.value)
   isReasonsOpen.value = false
+  isStartedModalOpen.value = true
 }
 
 function stopDowntime() {
@@ -84,11 +91,35 @@ function stopDowntime() {
 
   active.value = null
   saveActive(null)
+  isFinishedModalOpen.value = true
 }
 
 function setCurrentField(id: string) {
   if (active.value?.fieldId && active.value.fieldId === id) return
   currentFieldId.value = id
+}
+
+function openAddField() {
+  newFieldName.value = ''
+  newFieldOperation.value = ''
+  isAddFieldOpen.value = true
+}
+
+function addField() {
+  const name = newFieldName.value.trim()
+  const op = newFieldOperation.value.trim()
+  if (!name || !op) {
+    return
+  }
+  const id = `field-${Date.now()}`
+  const field: MechanicField = {
+    id,
+    name,
+    operation: op,
+  }
+  fields.value = [...fields.value, field]
+  currentFieldId.value = id
+  isAddFieldOpen.value = false
 }
 </script>
 
@@ -135,6 +166,9 @@ function setCurrentField(id: string) {
             >
               <span class="field-chip-name">{{ field.name }}</span>
               <span class="field-chip-op">{{ field.operation }}</span>
+            </button>
+            <button class="field-chip field-chip-add" type="button" @click="openAddField">
+              + Добавить поле
             </button>
           </div>
         </section>
@@ -192,6 +226,81 @@ function setCurrentField(id: string) {
         </li>
       </ul>
     </aside>
+
+    <div
+      v-if="isStartedModalOpen"
+      class="modal-backdrop"
+      @click="isStartedModalOpen = false"
+    >
+      <div class="modal" @click.stop>
+        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-title">Простой зафиксирован</div>
+        <p class="modal-text">
+          Начало простоя записано по объекту «{{ circleFieldLabel }}», операция: {{ circleTaskLabel }}.
+          Данные учтены в системе.
+        </p>
+        <button class="modal-btn" type="button" @click="isStartedModalOpen = false">
+          Понятно
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-if="isFinishedModalOpen"
+      class="modal-backdrop"
+      @click="isFinishedModalOpen = false"
+    >
+      <div class="modal" @click.stop>
+        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-title">Простой завершён</div>
+        <p class="modal-text">
+          Запись сохранена. Простой отображается в разделе «Отчёты» и в журнале работ.
+        </p>
+        <button class="modal-btn" type="button" @click="isFinishedModalOpen = false">
+          Закрыть
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-if="isAddFieldOpen"
+      class="modal-backdrop"
+      @click="isAddFieldOpen = false"
+    >
+      <div class="modal" @click.stop>
+        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-title">Новое поле</div>
+        <p class="modal-text modal-text-muted">
+          Добавьте поле в список «Мои поля сегодня» для учёта работ и простоев.
+        </p>
+        <div class="modal-form">
+          <label class="modal-field">
+            <span class="modal-label">Название поля</span>
+            <input
+              v-model="newFieldName"
+              type="text"
+              placeholder="Например: Поле №15"
+            />
+          </label>
+          <label class="modal-field">
+            <span class="modal-label">Операция</span>
+            <input
+              v-model="newFieldOperation"
+              type="text"
+              placeholder="Например: Посев, Уборка, Опрыскивание"
+            />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn-ghost" type="button" @click="isAddFieldOpen = false">
+            Отмена
+          </button>
+          <button class="modal-btn" type="button" @click="addField">
+            Добавить
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -201,7 +310,7 @@ function setCurrentField(id: string) {
   display: flex;
   align-items: stretch;
   justify-content: center;
-  background: radial-gradient(circle at 50% 0, #162611 0, transparent 70%), #050a04;
+  background: radial-gradient(circle at 50% 0, #2a4235 0, transparent 68%), #0f1614;
   color: var(--text-primary);
 }
 
@@ -352,6 +461,11 @@ function setCurrentField(id: string) {
   transform: translateY(-1px);
 }
 
+.field-chip-add {
+  border-style: dashed;
+  opacity: 0.8;
+}
+
 .mechanic-actions {
   display: flex;
   flex-direction: column;
@@ -380,6 +494,112 @@ function setCurrentField(id: string) {
   background: transparent;
   border-color: var(--danger-red);
   color: var(--danger-red);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.modal {
+  width: min(100vw - 48px, 360px);
+  background: var(--bg-panel);
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  padding: var(--space-lg);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+}
+
+.modal-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--accent-green);
+  margin-bottom: 6px;
+}
+
+.modal-title {
+  font-size: 1.15rem;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.modal-text {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-md);
+  line-height: 1.45;
+}
+
+.modal-text-muted {
+  margin-bottom: var(--space-sm);
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+}
+
+.modal-field input {
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.modal-field input::placeholder {
+  color: var(--text-secondary);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.modal-btn,
+.modal-btn-ghost {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.modal-btn {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: #000;
+}
+
+.modal-btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .sheet-backdrop {
