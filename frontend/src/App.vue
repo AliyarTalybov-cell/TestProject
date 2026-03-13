@@ -108,8 +108,12 @@ const { theme, toggle } = useTheme()
           </div>
         </div>
       </header>
-      <div class="main-content-inner">
-        <RouterView />
+      <div class="main-content-inner main-content-inner--animated">
+        <RouterView v-slot="{ Component }">
+          <Transition name="page" mode="out-in">
+            <component :is="Component" />
+          </Transition>
+        </RouterView>
       </div>
     </main>
   </div>

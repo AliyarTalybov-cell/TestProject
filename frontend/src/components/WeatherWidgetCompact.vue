@@ -4,6 +4,11 @@ import { useRouter } from 'vue-router'
 import { fetchWeather, getWeatherIconUrl, type WeatherData } from '@/lib/weatherApi'
 import { useWeatherCity } from '@/composables/useWeatherCity'
 
+const { variant = 'default' } = defineProps<{
+  /** Компактный вариант для дашборда (Обзор) — в стиле страницы Погода, но плотнее */
+  variant?: 'default' | 'dashboard'
+}>()
+
 const router = useRouter()
 const { cityValue, city, country } = useWeatherCity()
 const weather = ref<WeatherData | null>(null)
@@ -55,7 +60,7 @@ const weatherSkyClass = () => {
 </script>
 
 <template>
-  <div class="weather-widget-compact" aria-live="polite">
+  <div class="weather-widget-compact" :class="{ 'weather-widget-compact--dashboard': variant === 'dashboard' }" aria-live="polite">
     <div v-if="loading" class="weather-compact-loading weather-compact-pulse">Загрузка погоды…</div>
     <div v-else-if="error" class="weather-compact-error">Не удалось загрузить погоду</div>
     <div v-else class="weather-compact-content weather-compact-in">
@@ -99,6 +104,72 @@ const weatherSkyClass = () => {
   margin-bottom: var(--space-xl);
   box-shadow: var(--shadow-card);
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.weather-widget-compact--dashboard {
+  margin-bottom: 0;
+}
+
+/* Компактный вариант для Обзора: как страница Погода, но плотнее */
+.weather-widget-compact--dashboard {
+  padding: var(--space-md) var(--space-lg);
+  border-radius: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.weather-widget-compact--dashboard .weather-compact-sky.weather-sky {
+  width: 88px;
+  min-width: 88px;
+  min-height: 48px;
+  border-radius: 10px;
+  margin-bottom: 0;
+  flex-shrink: 0;
+}
+
+.weather-widget-compact--dashboard .weather-compact-city {
+  font-size: 0.95rem;
+  margin-right: 0;
+}
+
+.weather-widget-compact--dashboard .weather-compact-temp {
+  font-size: 1.5rem;
+}
+
+.weather-widget-compact--dashboard .weather-compact-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.weather-widget-compact--dashboard .weather-compact-content {
+  gap: var(--space-sm);
+  flex-wrap: nowrap;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.weather-widget-compact--dashboard .weather-compact-desc {
+  font-size: 0.85rem;
+}
+
+.weather-widget-compact--dashboard .weather-compact-feels {
+  font-size: 0.75rem;
+}
+
+.weather-widget-compact--dashboard .weather-compact-meta {
+  gap: var(--space-sm);
+}
+
+.weather-widget-compact--dashboard .weather-compact-meta span {
+  font-size: 0.7rem;
+}
+
+.weather-widget-compact--dashboard .type-action {
+  margin-top: 4px;
+  font-size: 0.8rem;
 }
 
 .weather-compact-sky.weather-sky {

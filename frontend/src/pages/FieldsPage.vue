@@ -176,7 +176,7 @@ const visibleFieldIds = computed(() => new Set(filteredFields.value.map((f) => f
 
 <template>
   <section>
-    <header class="header-area">
+    <header class="header-area page-enter-item">
       <div>
         <div class="type-label" style="margin-bottom: 8px">Текущий раздел</div>
         <h1 class="page-title">Мониторинг полей</h1>

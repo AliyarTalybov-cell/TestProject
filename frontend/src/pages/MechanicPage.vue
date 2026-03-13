@@ -165,7 +165,7 @@ function addField() {
 <template>
   <section class="mechanic-page">
     <div class="mechanic-shell">
-      <header class="mechanic-header">
+      <header class="mechanic-header page-enter-item">
         <div class="mechanic-title">
           <div class="mechanic-badge">AGRO_CTRL • Оператор</div>
           <div class="mechanic-operator">{{ EMPLOYEE_NAME }}</div>
@@ -179,7 +179,7 @@ function addField() {
       </header>
 
       <main class="mechanic-main">
-        <section class="mechanic-task-block">
+        <section class="mechanic-task-block page-enter-item" style="--enter-delay: 60ms">
           <div class="mechanic-task-label">Текущая задача</div>
           <div class="mechanic-task-timer">{{ active ? timerLabel : '—' }}</div>
           <h2 class="mechanic-task-title">{{ taskTitle }}</h2>
@@ -211,7 +211,7 @@ function addField() {
           </div>
         </section>
 
-        <section class="mechanic-cards">
+        <section class="mechanic-cards page-enter-item" style="--enter-delay: 120ms">
           <div class="mechanic-card mechanic-card-equipment">
             <div class="mechanic-card-header">
               <div class="mechanic-card-title">Статус техники (John Deere 8R)</div>
@@ -267,7 +267,7 @@ function addField() {
           </div>
         </section>
 
-        <section class="mechanic-fields mechanic-fields-compact">
+        <section class="mechanic-fields mechanic-fields-compact page-enter-item" style="--enter-delay: 180ms">
           <div class="mechanic-fields-header">
             <div class="type-label">Мои поля сегодня</div>
             <div class="mechanic-fields-hint">Выберите, с каким полем вы сейчас работаете</div>

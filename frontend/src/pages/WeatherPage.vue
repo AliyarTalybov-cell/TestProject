@@ -170,7 +170,7 @@ const fieldsWithWeather = computed(() => {
 
 <template>
   <section class="weather-page">
-    <header class="header-area header-weather">
+    <header class="header-area header-weather page-enter-item">
       <div class="weather-header-actions">
         <select
           :value="cityValue"
@@ -188,7 +188,7 @@ const fieldsWithWeather = computed(() => {
     <div v-else-if="error" class="weather-detail-error">Не удалось загрузить погоду</div>
     <template v-else-if="weather">
       <!-- Герой-карточка как в design: волна + локация | температура | рекомендация -->
-      <div class="weather-hero">
+      <div class="weather-hero page-enter-item" style="--enter-delay: 60ms">
         <svg class="weather-hero-wave" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320" preserveAspectRatio="none" aria-hidden="true">
           <path fill="#ffffff" fill-opacity="1" d="M0,128L48,144C96,160,192,192,288,197.3C384,203,480,181,576,170.7C672,160,768,160,864,170.7C960,181,1056,203,1152,192C1248,181,1344,139,1392,117.3L1440,96L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z" />
         </svg>
@@ -225,8 +225,8 @@ const fieldsWithWeather = computed(() => {
         </div>
       </div>
 
-      <h2 class="weather-section-title">Подробные показатели</h2>
-      <div class="weather-indicators-grid">
+      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 120ms">Подробные показатели</h2>
+      <div class="weather-indicators-grid page-enter-item" style="--enter-delay: 180ms">
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-wind">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2" /><path d="M9.6 4.6A2 2 0 1 1 11 8H2" /><path d="M12.6 19.4A2 2 0 1 0 14 16H2" /></svg>
@@ -295,8 +295,8 @@ const fieldsWithWeather = computed(() => {
         </div>
       </div>
 
-      <h2 class="weather-section-title">Прогноз на 5 дней</h2>
-      <div class="weather-forecast-strip">
+      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 280ms">Прогноз на 5 дней</h2>
+      <div class="weather-forecast-strip page-enter-item" style="--enter-delay: 320ms">
         <div
           v-for="day in forecastWithLabels"
           :key="day.date"

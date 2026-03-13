@@ -417,6 +417,44 @@ a {
   }
 }
 
+.main-content-inner--animated {
+  overflow-x: hidden;
+}
+
+/* ——— Анимация перехода между страницами ——— */
+.page-enter-active {
+  transition: opacity 0.35s ease-out, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.page-leave-active {
+  transition: opacity 0.25s ease-in, transform 0.25s ease-in;
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* Общий класс для появления элементов с задержкой (вкладки, карточки) */
+.page-enter-item {
+  opacity: 0;
+  transform: translateY(14px);
+  animation: pageItemEnter 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+@keyframes pageItemEnter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .page-title {
   margin: 0;
   font-size: 1.5rem;

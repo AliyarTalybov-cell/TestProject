@@ -129,7 +129,7 @@ function formatDate(iso: string): string {
 
 <template>
   <section class="reports-page">
-    <header class="header-area reports-header">
+    <header class="header-area reports-header page-enter-item">
       <div>
         <div class="type-label">Сводка по простоям</div>
         <h1 class="page-title">Отчеты</h1>
@@ -147,7 +147,7 @@ function formatDate(iso: string): string {
     </header>
 
     <div class="reports-grid">
-      <section class="panel panel-table">
+      <section class="panel panel-table page-enter-item" style="--enter-delay: 80ms">
         <div class="panel-header">
           <div>
             <div class="type-label">Журнал</div>
@@ -211,7 +211,7 @@ function formatDate(iso: string): string {
         </div>
       </section>
 
-      <section class="panel panel-chart">
+      <section class="panel panel-chart page-enter-item" style="--enter-delay: 140ms">
         <div class="panel-header">
           <div>
             <div class="type-label">Структура простоев</div>

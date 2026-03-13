@@ -197,23 +197,23 @@ const donutStyle = computed(() => {
 </script>
 
 <template>
-  <section class="dashboard-page dashboard-enter">
-    <header class="header-area dashboard-enter-item">
+  <section class="dashboard-page">
+    <header class="header-area page-enter-item">
       <div>
         <div class="type-label" style="margin-bottom: 8px">Аналитика простоев</div>
         <h1 class="page-title">Дашборд простоев техники</h1>
       </div>
     </header>
 
-    <div class="dashboard-enter-item" style="--enter-delay: 80ms">
-      <WeatherWidgetCompact />
+    <div class="page-enter-item" style="--enter-delay: 80ms">
+      <WeatherWidgetCompact variant="dashboard" />
     </div>
 
     <div class="metrics-row">
       <article
         v-for="(_, i) in 4"
         :key="'m-' + i"
-        class="metric-card dashboard-enter-item"
+        class="metric-card page-enter-item"
         :style="{ '--enter-delay': 120 + i * 60 + 'ms' }"
       >
         <template v-if="i === 0">
@@ -239,7 +239,7 @@ const donutStyle = computed(() => {
       </article>
     </div>
 
-    <div class="dashboard-grid dashboard-enter-item" style="--enter-delay: 420ms">
+    <div class="dashboard-grid page-enter-item" style="--enter-delay: 420ms">
       <aside class="panel panel-chart dashboard-data-block">
         <div class="panel-header">
           <div class="type-label">Распределение причин</div>
@@ -393,21 +393,6 @@ const donutStyle = computed(() => {
   display: flex;
   flex-direction: column;
   gap: var(--space-xl);
-}
-
-/* Анимация появления при входе на страницу */
-.dashboard-enter-item {
-  opacity: 0;
-  transform: translateY(12px);
-  animation: dashboardItemEnter 0.5s ease forwards;
-  animation-delay: var(--enter-delay, 0ms);
-}
-
-@keyframes dashboardItemEnter {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 /* Плавное изменение при смене фильтров/данных */
