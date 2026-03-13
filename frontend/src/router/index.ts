@@ -6,6 +6,7 @@ import FieldsPage from '@/pages/FieldsPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import ReportsPage from '@/pages/ReportsPage.vue'
 import TasksPage from '@/pages/TasksPage.vue'
+import TaskManagementPage from '@/pages/TaskManagementPage.vue'
 import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
 
@@ -17,6 +18,7 @@ export const routes = [
   { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля' } },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },
+  { path: '/task-management', name: 'task-management', component: TaskManagementPage, meta: { title: 'Задачи' } },
   { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },
   { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Отчеты' } },
 ] as const
