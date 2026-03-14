@@ -9,6 +9,7 @@ import {
 } from '@/lib/operationStorage'
 import { loadDowntimeReasons, loadWorkOperations, isSupabaseConfigured } from '@/lib/reasonsAndOperations'
 import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperations'
+import { useAuth } from '@/stores/auth'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
@@ -18,7 +19,12 @@ const DEFAULT_REASONS: Array<{ label: string; description: string; category: Dow
   { label: 'Ожидание задания', description: 'Нет подтверждённого задания от агронома', category: 'waiting' },
 ]
 
-const EMPLOYEE_NAME = 'Механизатор #1'
+const auth = useAuth()
+const employeeDisplayName = computed(() => {
+  const u = auth.user.value
+  if (!u) return 'Гость'
+  return (u.email ?? (u.user_metadata?.full_name as string) ?? 'Пользователь').trim() || 'Пользователь'
+})
 
 const timerTick = ref(0)
 let timerInterval: ReturnType<typeof setInterval> | null = null
@@ -141,7 +147,7 @@ function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   const field = currentField.value
   active.value = {
     id: now.getTime(),
-    employee: EMPLOYEE_NAME,
+    employee: employeeDisplayName.value,
     reason: reason.label,
     category: reason.category,
     startISO: now.toISOString(),
@@ -189,7 +195,7 @@ function startOperation(field: MechanicField) {
     fieldId: field.id,
     fieldName: field.name,
     operation: field.operation,
-    employee: EMPLOYEE_NAME,
+    employee: employeeDisplayName.value,
   })
   isOperationsOpen.value = false
 }
@@ -203,7 +209,7 @@ function startOperationByName(op: WorkOperationRow) {
     fieldId: field?.id,
     fieldName: field?.name,
     operation: op.name,
-    employee: EMPLOYEE_NAME,
+    employee: employeeDisplayName.value,
   })
   isOperationsOpen.value = false
 }
@@ -216,7 +222,7 @@ function stopOperation() {
   const field = currentField.value
   appendOperation({
     id: now.getTime(),
-    employee: EMPLOYEE_NAME,
+    employee: employeeDisplayName.value,
     fieldId: field?.id,
     fieldName: field?.name,
     operation: field?.operation,
@@ -258,7 +264,7 @@ function addField() {
       <header class="mechanic-header page-enter-item">
         <div class="mechanic-title">
           <div class="mechanic-badge">AGRO_CTRL • Оператор</div>
-          <div class="mechanic-operator">{{ EMPLOYEE_NAME }}</div>
+          <div class="mechanic-operator">{{ employeeDisplayName }}</div>
         </div>
         <div class="mechanic-status">
           <span class="status-dot" :class="{ 'status-dot-active': !!active }" />
@@ -499,7 +505,7 @@ function addField() {
         <div class="modal-badge">Агро-Контроль</div>
         <div class="modal-title">Простой завершён</div>
         <p class="modal-text">
-          Запись сохранена. Простой отображается в разделе «Отчёты» и в журнале работ.
+          Запись сохранена. Простой отображается в разделе «Аналитика» и в журнале работ.
         </p>
         <button class="modal-btn" type="button" @click="isFinishedModalOpen = false">
           Закрыть

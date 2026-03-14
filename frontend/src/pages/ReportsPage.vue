@@ -64,6 +64,15 @@ const totalHoursLabel = computed(() => {
   return `${hours.toFixed(1)} ч`
 })
 
+const totalOpsMinutes = computed(() =>
+  operations.value.reduce((sum, o) => sum + o.durationMinutes, 0),
+)
+const totalOpsHoursLabel = computed(() => {
+  if (!totalOpsMinutes.value) return '0 ч'
+  return `${(totalOpsMinutes.value / 60).toFixed(1)} ч`
+})
+const hasOperations = computed(() => operations.value.length > 0)
+
 const categoriesMeta: Record<
   DowntimeCategory,
   { label: string; colorClass: string }
@@ -143,6 +152,126 @@ const topEmployees = computed(() => {
     .slice(0, 4)
 })
 
+const OPERATION_COLORS = ['#2e7d32', '#1565c0', '#6a1b9a', '#c62828', '#ef6c00', '#00838f', '#558b2f', '#9e9e9e']
+
+const operationMinutes = computed(() => {
+  const map = new Map<string, number>()
+  operations.value.forEach((o) => {
+    const name = o.operation?.trim() || '—'
+    map.set(name, (map.get(name) ?? 0) + o.durationMinutes)
+  })
+  return map
+})
+
+const operationPercents = computed(() => {
+  const total = totalOpsMinutes.value
+  if (!total) return [] as { name: string; percent: number; minutes: number }[]
+  return Array.from(operationMinutes.value.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, minutes]) => ({
+      name,
+      percent: (minutes / total) * 100,
+      minutes,
+    }))
+})
+
+const donutStyleOps = computed(() => {
+  const entries = operationPercents.value
+  if (!entries.length) return { background: 'var(--donut-inner-bg)' }
+  let acc = 0
+  const parts = entries.map((e, i) => {
+    const start = acc
+    acc += e.percent
+    return `${OPERATION_COLORS[i % OPERATION_COLORS.length]} ${start}% ${acc}%`
+  })
+  return {
+    background: `conic-gradient(${parts.join(', ')})`,
+  }
+})
+
+const hoveredOperation = ref<string | null>(null)
+
+const topEmployeesOps = computed(() => {
+  const map = new Map<string, number>()
+  operations.value.forEach((o) => {
+    map.set(o.employee, (map.get(o.employee) ?? 0) + o.durationMinutes)
+  })
+  return Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+})
+
+const displayedOpsTotalHoursLabel = computed(() => {
+  if (!totalOpsMinutes.value) return '0 ч'
+  const hours = (animateProgress.value * totalOpsMinutes.value) / 60
+  return `${hours.toFixed(1)} ч`
+})
+
+const WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] as const
+const dynamicsMetric = ref<'hours' | 'percent'>('hours')
+
+type DayData = { label: string; workMinutes: number; waitingMinutes: number; downtimeMinutes: number }
+
+function toDayKey(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+
+const dynamicsLast7Days = computed((): DayData[] => {
+  const result: DayData[] = []
+  const now = new Date()
+  const dayKeys = new Map<string, { work: number; downtime: number }>()
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    dayKeys.set(toDayKey(d), { work: 0, downtime: 0 })
+  }
+  operations.value.forEach((o) => {
+    const start = new Date(o.startISO)
+    const key = toDayKey(start)
+    const day = dayKeys.get(key)
+    if (day) day.work += o.durationMinutes
+  })
+  events.value.forEach((e) => {
+    const start = new Date(e.startISO)
+    const key = toDayKey(start)
+    const day = dayKeys.get(key)
+    if (day) day.downtime += e.durationMinutes
+  })
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const key = toDayKey(d)
+    const day = dayKeys.get(key) ?? { work: 0, downtime: 0 }
+    result.push({
+      label: WEEKDAY_LABELS[d.getDay()],
+      workMinutes: day.work,
+      waitingMinutes: 0,
+      downtimeMinutes: day.downtime,
+    })
+  }
+  return result
+})
+
+const dynamicsMaxMinutes = computed(() => {
+  let max = 0
+  dynamicsLast7Days.value.forEach((day) => {
+    const total = day.workMinutes + day.waitingMinutes + day.downtimeMinutes
+    if (total > max) max = total
+  })
+  return Math.max(max, 60)
+})
+
+function dynamicsBarHeight(minutes: number, day?: DayData): string {
+  if (dynamicsMetric.value === 'percent' && day) {
+    const total = day.workMinutes + day.waitingMinutes + day.downtimeMinutes
+    if (!total) return '0%'
+    return `${(minutes / total) * 100}%`
+  }
+  if (!dynamicsMaxMinutes.value) return '0%'
+  const pct = (minutes / dynamicsMaxMinutes.value) * 100
+  return `${Math.min(100, pct)}%`
+}
+
 const displayedTotalHoursLabel = computed(() => {
   if (!totalMinutes.value) return '0 ч'
   const hours = (animateProgress.value * totalMinutes.value) / 60
@@ -183,17 +312,25 @@ function formatDate(iso: string): string {
   <section class="reports-page">
     <header class="header-area reports-header page-enter-item">
       <div>
-        <div class="type-label">Сводка по простоям</div>
-        <h1 class="page-title">Отчеты</h1>
+        <div class="type-label">Сводка</div>
+        <h1 class="page-title">Аналитика</h1>
       </div>
       <div class="reports-header-meta">
         <div class="summary-item">
-          <div class="type-label">Всего записей</div>
+          <div class="type-label">Простои: записей</div>
           <div class="type-value">{{ events.length }}</div>
         </div>
         <div class="summary-item">
-          <div class="type-label">Общее время простоя</div>
+          <div class="type-label">Простои: время</div>
           <div class="type-value">{{ totalHoursLabel }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="type-label">Операции: записей</div>
+          <div class="type-value">{{ operations.length }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="type-label">Операции: время</div>
+          <div class="type-value">{{ totalOpsHoursLabel }}</div>
         </div>
       </div>
     </header>
@@ -214,6 +351,58 @@ function formatDate(iso: string): string {
       </template>
     </div>
 
+    <section class="analytics-dynamics page-enter-item" style="--enter-delay: 40ms">
+      <div class="type-label analytics-dynamics-section-label">Дополнительная аналитика</div>
+      <div class="panel analytics-dynamics-card">
+        <div class="analytics-dynamics-header">
+          <div>
+            <div class="type-label analytics-dynamics-sublabel">ДИНАМИКА</div>
+            <h2 class="analytics-dynamics-title">Активность за 7 дней</h2>
+          </div>
+          <div class="analytics-dynamics-select-wrap">
+            <select v-model="dynamicsMetric" class="analytics-dynamics-select" aria-label="Единица измерения">
+              <option value="hours">Часы работы</option>
+              <option value="percent">Процент</option>
+            </select>
+          </div>
+        </div>
+        <div class="analytics-dynamics-chart">
+          <div
+            v-for="(day, idx) in dynamicsLast7Days"
+            :key="idx"
+            class="dynamics-bar-col"
+          >
+            <div class="dynamics-bar-stack">
+              <div
+                v-if="day.workMinutes > 0"
+                class="dynamics-bar dynamics-bar--work"
+                :style="{ height: dynamicsBarHeight(day.workMinutes, day) }"
+                :title="`В работе: ${(day.workMinutes / 60).toFixed(1)} ч`"
+              />
+              <div
+                v-if="day.waitingMinutes > 0"
+                class="dynamics-bar dynamics-bar--waiting"
+                :style="{ height: dynamicsBarHeight(day.waitingMinutes, day) }"
+                :title="`Ожидание: ${(day.waitingMinutes / 60).toFixed(1)} ч`"
+              />
+              <div
+                v-if="day.downtimeMinutes > 0"
+                class="dynamics-bar dynamics-bar--downtime"
+                :style="{ height: dynamicsBarHeight(day.downtimeMinutes, day) }"
+                :title="`Простой: ${(day.downtimeMinutes / 60).toFixed(1)} ч`"
+              />
+            </div>
+            <span class="dynamics-day-label">{{ day.label }}</span>
+          </div>
+        </div>
+        <div class="analytics-dynamics-legend">
+          <span class="dynamics-legend-item dynamics-legend-item--work">В работе</span>
+          <span class="dynamics-legend-item dynamics-legend-item--waiting">Ожидание</span>
+          <span class="dynamics-legend-item dynamics-legend-item--downtime">Простой</span>
+        </div>
+      </div>
+    </section>
+
     <div class="reports-grid">
       <section class="panel panel-table page-enter-item" style="--enter-delay: 80ms">
         <div class="panel-header">
@@ -225,7 +414,7 @@ function formatDate(iso: string): string {
 
         <div v-if="!hasEvents" class="empty-state">
           <p class="placeholder-text">
-            Пока нет записей о простоях. Как только механизатор начнет и завершит простой, он появится в этом журнале.
+            Пока нет записей о простоях. Как только пользователь начнёт и завершит простой на экране оператора, запись появится в этом журнале.
           </p>
         </div>
 
@@ -359,7 +548,7 @@ function formatDate(iso: string): string {
         </div>
       </section>
 
-      <section class="panel panel-table page-enter-item operations-panel" style="--enter-delay: 180ms">
+      <section class="panel panel-table page-enter-item" style="--enter-delay: 180ms">
         <div class="panel-header">
           <div>
             <div class="type-label">Журнал</div>
@@ -417,6 +606,76 @@ function formatDate(iso: string): string {
           </button>
         </div>
       </section>
+
+      <section class="panel panel-chart page-enter-item operations-chart-panel" style="--enter-delay: 220ms">
+        <div class="panel-header">
+          <div>
+            <div class="type-label">Структура операций</div>
+            <div class="panel-title">По типам операций и сотрудникам</div>
+          </div>
+        </div>
+
+        <div v-if="hasOperations" class="chart-layout">
+          <div
+            class="donut-wrapper chart-wrapper-interactive chart-wrapper-ops"
+            :data-hover="hoveredOperation ?? ''"
+          >
+            <div class="donut-chart reports-donut reports-donut-ops" :style="donutStyleOps">
+              <div class="donut-inner">
+                <div class="donut-total">{{ displayedOpsTotalHoursLabel }}</div>
+                <div class="donut-label">Всего работ</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-side">
+            <ul class="legend">
+              <li
+                v-for="(entry, idx) in operationPercents"
+                :key="entry.name"
+                class="legend-item legend-item-reveal"
+                :class="{ 'legend-item-active': hoveredOperation === entry.name }"
+                :style="{ '--legend-delay': 0.35 + idx * 0.08 + 's' }"
+                @mouseenter="hoveredOperation = entry.name"
+                @mouseleave="hoveredOperation = null"
+              >
+                <div class="legend-label">
+                  <span
+                    class="legend-color legend-color-ops"
+                    :style="{ backgroundColor: OPERATION_COLORS[idx % OPERATION_COLORS.length] }"
+                  />
+                  <span>{{ entry.name }}</span>
+                </div>
+                <span class="legend-value">
+                  {{ Math.round(animateProgress * entry.percent) }}% ·
+                  {{ formatDuration(entry.minutes) }}
+                </span>
+              </li>
+            </ul>
+
+            <div class="top-employees">
+              <div class="type-label">Топ по времени работ</div>
+              <ul class="top-list">
+                <li
+                  v-for="([name, minutes], idx) in topEmployeesOps"
+                  :key="name"
+                  class="top-item top-item-reveal"
+                  :style="{ '--top-delay': 0.6 + idx * 0.06 + 's' }"
+                >
+                  <span class="top-name">{{ name }}</span>
+                  <span class="top-value">{{ formatDuration(minutes) }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="empty-state">
+          <p class="placeholder-text">
+            Как только появятся данные об операциях, здесь будет распределение по типам и сотрудникам.
+          </p>
+        </div>
+      </section>
     </div>
   </section>
 </template>
@@ -426,6 +685,156 @@ function formatDate(iso: string): string {
   display: flex;
   flex-direction: column;
   gap: var(--space-xl);
+}
+
+.analytics-dynamics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.analytics-dynamics-section-label {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.analytics-dynamics-card {
+  border-radius: 12px;
+  padding: var(--space-lg);
+}
+
+.analytics-dynamics-sublabel {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 4px;
+}
+
+.analytics-dynamics-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.analytics-dynamics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-lg);
+}
+
+.analytics-dynamics-select-wrap {
+  flex-shrink: 0;
+}
+
+.analytics-dynamics-select {
+  padding: 8px 28px 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.analytics-dynamics-chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 140px;
+  padding: 0 4px;
+}
+
+.dynamics-bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.dynamics-bar-stack {
+  width: 100%;
+  max-width: 36px;
+  height: 100px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  border-radius: 6px 6px 0 0;
+  overflow: hidden;
+  background: var(--chip-bg);
+}
+
+.dynamics-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 0;
+  transition: height 0.3s ease;
+}
+
+.dynamics-bar--work {
+  background: var(--accent-green);
+}
+
+.dynamics-bar--waiting {
+  background: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.dynamics-bar--downtime {
+  background: var(--danger-red);
+}
+
+.dynamics-day-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.analytics-dynamics-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-color);
+}
+
+.dynamics-legend-item {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dynamics-legend-item::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.dynamics-legend-item--work::before {
+  background: var(--accent-green);
+}
+
+.dynamics-legend-item--waiting::before {
+  background: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.dynamics-legend-item--downtime::before {
+  background: var(--danger-red);
 }
 
 .reports-header {
@@ -831,8 +1240,14 @@ tbody tr:hover td {
   border-color: var(--agri-primary);
 }
 
-.operations-panel {
-  grid-column: 1 / -1;
+.legend-color-ops {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.chart-wrapper-ops[data-hover] .reports-donut-ops {
+  transform: scale(1.03);
 }
 
 .empty-state {

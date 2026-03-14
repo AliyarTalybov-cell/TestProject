@@ -494,7 +494,7 @@ onMounted(loadRefs)
             <div class="field-details-actions">
               <button class="btn btn-primary" type="button">Запланировать уборку</button>
               <button class="btn btn-ghost" type="button" @click="openJournal">Открыть журнал работ</button>
-              <button class="btn btn-ghost" type="button" @click="openReports">Перейти к отчётам</button>
+              <button class="btn btn-ghost" type="button" @click="openReports">Перейти к аналитике</button>
             </div>
           </template>
         </aside>

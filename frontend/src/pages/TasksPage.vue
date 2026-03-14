@@ -29,7 +29,7 @@ const events = computed(() => loadEvents().sort((a, b) => a.startISO.localeCompa
           <tbody>
             <tr v-if="!events.length">
               <td colspan="5" class="empty-cell">
-                Пока нет записей — отметь простой на экране механизатора.
+                Пока нет записей — отметь простой на экране оператора.
               </td>
             </tr>
             <tr v-for="event in events" :key="event.id">

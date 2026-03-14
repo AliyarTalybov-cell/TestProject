@@ -22,7 +22,7 @@ export const routes = [
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },
   { path: '/task-management', name: 'task-management', component: TaskManagementPage, meta: { title: 'Задачи' } },
   { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },
-  { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Отчеты' } },
+  { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Аналитика' } },
 ] as const
 
 export const router = createRouter({

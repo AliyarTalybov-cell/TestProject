@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onActivated } from 'vue'
+import type { StoredDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
+import { loadEvents } from '@/lib/downtimeStorage'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 type DateRangeKey = 'today' | 'week' | 'month'
-type DowntimeCategory = 'breakdown' | 'rain' | 'fuel' | 'waiting'
 type DowntimeStatus = 'active' | 'resolved'
 
 type DowntimeEvent = {
@@ -18,85 +19,42 @@ type DowntimeEvent = {
   range: DateRangeKey
 }
 
-const events = ref<DowntimeEvent[]>([
-  {
-    id: 1,
-    employee: 'Иванов И.И.',
-    reason: 'Поломка гидравлики',
-    category: 'breakdown',
-    start: '08:15',
-    end: '11:00',
-    durationMinutes: 165,
+function getRangeKey(iso: string): DateRangeKey {
+  const d = new Date(iso)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const eventDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const diffDays = (today - eventDay) / (24 * 60 * 60 * 1000)
+  if (diffDays <= 0) return 'today'
+  if (diffDays <= 7) return 'week'
+  return 'month'
+}
+
+function mapStoredToEvent(e: StoredDowntime): DowntimeEvent {
+  const startD = new Date(e.startISO)
+  const endD = new Date(e.endISO)
+  return {
+    id: e.id,
+    employee: e.employee,
+    reason: e.reason,
+    category: e.category,
+    start: startD.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+    end: endD.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+    durationMinutes: e.durationMinutes,
     status: 'resolved',
-    range: 'today',
-  },
-  {
-    id: 2,
-    employee: 'Петров П.П.',
-    reason: 'Сильный дождь',
-    category: 'rain',
-    start: '10:30',
-    end: '12:00',
-    durationMinutes: 90,
-    status: 'resolved',
-    range: 'today',
-  },
-  {
-    id: 3,
-    employee: 'Сидоров С.С.',
-    reason: 'Ожидание топлива',
-    category: 'fuel',
-    start: '14:05',
-    end: '15:10',
-    durationMinutes: 65,
-    status: 'active',
-    range: 'today',
-  },
-  {
-    id: 4,
-    employee: 'Кузнецов В.В.',
-    reason: 'Поломка жатки',
-    category: 'breakdown',
-    start: '09:10',
-    end: '10:20',
-    durationMinutes: 70,
-    status: 'resolved',
-    range: 'week',
-  },
-  {
-    id: 5,
-    employee: 'Иванов И.И.',
-    reason: 'Ожидание задания',
-    category: 'waiting',
-    start: '16:00',
-    end: '16:45',
-    durationMinutes: 45,
-    status: 'resolved',
-    range: 'week',
-  },
-  {
-    id: 6,
-    employee: 'Петров П.П.',
-    reason: 'Нет топлива на РТК',
-    category: 'fuel',
-    start: '06:30',
-    end: '07:15',
-    durationMinutes: 45,
-    status: 'resolved',
-    range: 'month',
-  },
-  {
-    id: 7,
-    employee: 'Смирнов А.А.',
-    reason: 'Переувлажнение почвы',
-    category: 'rain',
-    start: '18:00',
-    end: '19:30',
-    durationMinutes: 90,
-    status: 'resolved',
-    range: 'month',
-  },
-])
+    range: getRangeKey(e.startISO),
+  }
+}
+
+function loadDashboardEvents(): DowntimeEvent[] {
+  return loadEvents().map(mapStoredToEvent)
+}
+
+const events = ref<DowntimeEvent[]>(loadDashboardEvents())
+
+onActivated(() => {
+  events.value = loadDashboardEvents()
+})
 
 const activeRange = ref<DateRangeKey>('today')
 const selectedEmployee = ref<string>('all')
