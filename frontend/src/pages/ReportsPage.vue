@@ -3,6 +3,9 @@ import { computed, ref, onMounted, onActivated } from 'vue'
 import type { StoredDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { loadEvents } from '@/lib/downtimeStorage'
 import { loadOperations } from '@/lib/operationStorage'
+import { useSupabaseCheck } from '@/composables/useSupabaseCheck'
+
+const { status: supabaseStatus, errorMessage: supabaseError, check: checkSupabase } = useSupabaseCheck()
 
 const events = ref<StoredDowntime[]>(loadEvents())
 const operations = ref(loadOperations())
@@ -194,6 +197,22 @@ function formatDate(iso: string): string {
         </div>
       </div>
     </header>
+
+    <div v-if="supabaseStatus !== 'idle'" class="supabase-status page-enter-item">
+      <template v-if="supabaseStatus === 'checking'">
+        <span class="supabase-status-dot supabase-status-dot--loading" />
+        Проверка подключения к базе данных...
+      </template>
+      <template v-else-if="supabaseStatus === 'ok'">
+        <span class="supabase-status-dot supabase-status-dot--ok" />
+        База данных Supabase: подключено
+      </template>
+      <template v-else-if="supabaseStatus === 'error'">
+        <span class="supabase-status-dot supabase-status-dot--error" />
+        Ошибка подключения: {{ supabaseError }}
+        <button type="button" class="supabase-status-retry" @click="checkSupabase">Повторить</button>
+      </template>
+    </div>
 
     <div class="reports-grid">
       <section class="panel panel-table page-enter-item" style="--enter-delay: 80ms">
@@ -412,6 +431,50 @@ function formatDate(iso: string): string {
 .reports-header {
   padding-bottom: var(--space-md);
   border-bottom: 1px solid var(--border-color);
+}
+
+.supabase-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: var(--space-md);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  background: var(--chip-bg);
+  border: 1px solid var(--border-color);
+}
+.supabase-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.supabase-status-dot--ok {
+  background: var(--accent-green);
+}
+.supabase-status-dot--error {
+  background: var(--danger-red);
+}
+.supabase-status-dot--loading {
+  background: var(--warning-orange);
+  animation: supabase-pulse 1s ease-in-out infinite;
+}
+@keyframes supabase-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.supabase-status-retry {
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.supabase-status-retry:hover {
+  background: var(--row-hover-bg);
 }
 
 .reports-header-meta {
