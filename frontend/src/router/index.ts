@@ -9,6 +9,7 @@ import TasksPage from '@/pages/TasksPage.vue'
 import TaskManagementPage from '@/pages/TaskManagementPage.vue'
 import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
+import EquipmentPage from '@/pages/EquipmentPage.vue'
 import { getAuthUser } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
@@ -19,6 +20,7 @@ export const routes = [
   { path: '/weather', name: 'weather', component: WeatherPage, meta: { title: 'Погода и условия' } },
   { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля' } },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
+  { path: '/equipment', name: 'equipment', component: EquipmentPage, meta: { title: 'Управление техникой' } },
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },
   { path: '/task-management', name: 'task-management', component: TaskManagementPage, meta: { title: 'Задачи' } },
   { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },

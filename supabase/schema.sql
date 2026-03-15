@@ -102,6 +102,26 @@ create policy "Allow all for profiles" on public.profiles
 create policy "Allow all for tasks" on public.tasks
   for all using (true) with check (true);
 
+-- Техника (справочник единиц техники)
+create table if not exists public.equipment (
+  id uuid primary key default gen_random_uuid(),
+  brand text not null,
+  license_plate text not null,
+  model text,
+  equipment_type text,
+  year int check (year is null or (year >= 1900 and year <= 2100)),
+  purpose_crop text,
+  "condition" text not null default 'operational' check ("condition" in ('operational', 'repair', 'decommissioned')),
+  notes text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table public.equipment enable row level security;
+
+create policy "Allow all for equipment" on public.equipment
+  for all using (true) with check (true);
+
 -- Если таблицы downtimes/operations уже были созданы без user_id, выполни в SQL Editor:
 -- alter table public.downtimes add column if not exists user_id uuid references auth.users(id);
 -- alter table public.operations add column if not exists user_id uuid references auth.users(id);

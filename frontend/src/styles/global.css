@@ -12,9 +12,9 @@
   --sidebar-border: #e5e7eb;
   --sidebar-text: #6b7280;
   --sidebar-text-hover: #111827;
-  --nav-active-bg: #e8eee9;
-  --nav-active-text: #2d5a3d;
-  --nav-active-bar: #2d5a3d;
+  --nav-active-bg: #f1f9f3;
+  --nav-active-text: #2e563d;
+  --nav-active-bar: #2e563d;
   --sidebar-hover-bg: #f9fafb;
   --topbar-border: #e5e7eb;
   --border-color: #e5e7eb;
@@ -359,7 +359,7 @@ a {
   align-items: center;
   gap: 12px;
   padding: 12px 24px;
-  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
@@ -367,7 +367,7 @@ a {
   background: var(--nav-active-bg);
   color: var(--nav-active-text);
   font-weight: 600;
-  border-right-color: var(--nav-active-bar);
+  border-left-color: var(--nav-active-bar);
 }
 
 .nav-item.router-link-active .nav-item-icon {

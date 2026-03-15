@@ -81,6 +81,21 @@ watch(mobileMenuOpen, (open) => {
               </RouterLink>
             </li>
             <li>
+              <RouterLink class="nav-item" to="/equipment">
+                <span class="nav-item-icon nav-item-icon--equipment" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 15a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/>
+                    <path d="M7 15l0 .01"/>
+                    <path d="M17 17a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>
+                    <path d="M10.5 17l6.5 0"/>
+                    <path d="M20 15.2v-4.2a1 1 0 0 0 -1 -1h-6l-2 -5h-6v6.5"/>
+                    <path d="M18 5h-1a1 1 0 0 0 -1 1v4"/>
+                  </svg>
+                </span>
+                Техника
+              </RouterLink>
+            </li>
+            <li>
               <RouterLink class="nav-item" to="/task-management">
                 <span class="nav-item-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
