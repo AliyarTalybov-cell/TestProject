@@ -19,7 +19,7 @@ export const routes = [
   { path: '/login', name: 'login', component: LoginPage, meta: { title: 'Вход', public: true } },
   { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { title: 'Обзор' } },
   { path: '/weather', name: 'weather', component: WeatherPage, meta: { title: 'Погода и условия' } },
-  { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля' } },
+  { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля и Культуры' } },
   { path: '/fields/:id', name: 'field-details', component: FieldDetailsPage, props: true, meta: { title: 'Поле' } },
   { path: '/equipment', name: 'equipment', component: EquipmentPage, meta: { title: 'Управление техникой' } },
   { path: '/tasks', name: 'tasks', component: TasksPage, meta: { title: 'Календарь' } },

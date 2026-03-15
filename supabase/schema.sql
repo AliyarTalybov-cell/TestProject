@@ -130,6 +130,34 @@ alter table public.equipment enable row level security;
 create policy "Allow all for equipment" on public.equipment
   for all using (true) with check (true);
 
+-- Поля (сельхозугодья): реестр и назначение ответственных
+create table if not exists public.fields (
+  id uuid primary key default gen_random_uuid(),
+  number int not null default 1,
+  name text not null,
+  area numeric not null check (area >= 0),
+  cadastral_number text,
+  location_description text,
+  land_type text not null check (land_type in ('Пашня', 'Залежь', 'Сенокос', 'Пастбище')),
+  sowing_year int check (sowing_year is null or (sowing_year >= 2000 and sowing_year <= 2100)),
+  responsible_id uuid references auth.users(id) on delete set null,
+  crop_key text not null check (crop_key in ('wheat', 'corn', 'soy', 'sunflower', 'none', 'meadow')),
+  scheme_file_url text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- Файлы схем храним в Supabase Storage. В Dashboard: Storage → New bucket → имя "field-schemes", Public = true.
+-- Тогда загрузка через supabase.storage.from('field-schemes').upload(path, file) и публичный URL для scheme_file_url.
+
+alter table public.fields enable row level security;
+
+create policy "Allow all for fields" on public.fields
+  for all using (true) with check (true);
+
+-- Если таблица fields уже была создана без scheme_file_url, выполни:
+-- alter table public.fields add column if not exists scheme_file_url text;
+
 -- Если таблицы downtimes/operations уже были созданы без user_id, выполни в SQL Editor:
 -- alter table public.downtimes add column if not exists user_id uuid references auth.users(id);
 -- alter table public.operations add column if not exists user_id uuid references auth.users(id);
