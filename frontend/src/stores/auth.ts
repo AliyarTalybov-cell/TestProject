@@ -36,9 +36,13 @@ export function useAuth() {
     return data
   }
 
-  async function register(email: string, password: string) {
+  async function register(email: string, password: string, role: 'worker' | 'manager' = 'worker') {
     if (!supabase) throw new Error('Supabase не настроен')
-    const { data, error } = await supabase.auth.signUp({ email, password })
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { role } },
+    })
     if (error) throw error
     user.value = data.user
     return data
@@ -50,11 +54,17 @@ export function useAuth() {
     user.value = null
   }
 
+  const userRole = computed<'worker' | 'manager'>(() => {
+    const role = user.value?.user_metadata?.role
+    return role === 'manager' ? 'manager' : 'worker'
+  })
+
   return {
     user,
     loading,
     isLoggedIn,
     isAuthConfigured: isSupabaseConfigured,
+    userRole,
     init,
     startAuthListener,
     login,

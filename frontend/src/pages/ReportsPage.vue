@@ -4,13 +4,37 @@ import type { StoredDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { loadEvents } from '@/lib/downtimeStorage'
 import { loadOperations } from '@/lib/operationStorage'
 import { useSupabaseCheck } from '@/composables/useSupabaseCheck'
+import { useAuth } from '@/stores/auth'
+import { isSupabaseConfigured, loadDowntimesFromSupabase, loadOperationsFromSupabase } from '@/lib/analyticsSupabase'
 
 const { status: supabaseStatus, errorMessage: supabaseError, check: checkSupabase } = useSupabaseCheck()
+const auth = useAuth()
+const isManagerRole = computed(() => auth.userRole.value === 'manager')
 
-const events = ref<StoredDowntime[]>(loadEvents())
+const events = ref<StoredDowntime[]>([])
 const operations = ref(loadOperations())
+const analyticsLoading = ref(true)
 const showAllDowntimes = ref(false)
 const showAllOperations = ref(false)
+
+async function loadAnalyticsData() {
+  analyticsLoading.value = true
+  if (isSupabaseConfigured() && auth.user.value) {
+    try {
+      const onlyMine = auth.userRole.value === 'worker'
+      const userId = auth.user.value.id
+      events.value = await loadDowntimesFromSupabase(onlyMine, userId)
+      operations.value = await loadOperationsFromSupabase(onlyMine, userId)
+    } catch {
+      events.value = loadEvents()
+      operations.value = loadOperations()
+    }
+  } else {
+    events.value = loadEvents()
+    operations.value = loadOperations()
+  }
+  analyticsLoading.value = false
+}
 
 const ROW_LIMIT = 5
 const hoveredCategory = ref<DowntimeCategory | null>(null)
@@ -26,10 +50,8 @@ onMounted(() => {
   requestAnimationFrame(tick)
 })
 
-onActivated(() => {
-  events.value = loadEvents()
-  operations.value = loadOperations()
-})
+onMounted(loadAnalyticsData)
+onActivated(loadAnalyticsData)
 
 const hasEvents = computed(() => events.value.length > 0)
 
@@ -212,34 +234,42 @@ const dynamicsMetric = ref<'hours' | 'percent'>('hours')
 
 type DayData = { label: string; workMinutes: number; waitingMinutes: number; downtimeMinutes: number }
 
+/** Ключ календарного дня в локальной таймзоне (YYYY-MM-DD) для однозначного сравнения */
 function toDayKey(d: Date): string {
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** Локальная календарная дата для момента (чтобы вечернее UTC не переходило на следующий день) */
+function toLocalDayKey(iso: string): string {
+  const d = new Date(iso)
+  return toDayKey(d)
 }
 
 const dynamicsLast7Days = computed((): DayData[] => {
   const result: DayData[] = []
   const now = new Date()
   const dayKeys = new Map<string, { work: number; downtime: number }>()
+  // Строим 7 дней: от «6 дней назад» до «сегодня» по локальной календарной дате
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(now)
-    d.setDate(d.getDate() - i)
-    dayKeys.set(toDayKey(d), { work: 0, downtime: 0 })
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12, 0, 0)
+    const key = toDayKey(d)
+    dayKeys.set(key, { work: 0, downtime: 0 })
   }
   operations.value.forEach((o) => {
-    const start = new Date(o.startISO)
-    const key = toDayKey(start)
+    const key = toLocalDayKey(o.startISO)
     const day = dayKeys.get(key)
     if (day) day.work += o.durationMinutes
   })
   events.value.forEach((e) => {
-    const start = new Date(e.startISO)
-    const key = toDayKey(start)
+    const key = toLocalDayKey(e.startISO)
     const day = dayKeys.get(key)
     if (day) day.downtime += e.durationMinutes
   })
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(now)
-    d.setDate(d.getDate() - i)
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12, 0, 0)
     const key = toDayKey(d)
     const day = dayKeys.get(key) ?? { work: 0, downtime: 0 }
     result.push({
@@ -314,8 +344,13 @@ function formatDate(iso: string): string {
       <div>
         <div class="type-label">Сводка</div>
         <h1 class="page-title">Аналитика</h1>
+        <p v-if="auth.user && isManagerRole" class="reports-role-hint">
+          Режим руководителя: данные по всем сотрудникам
+        </p>
       </div>
       <div class="reports-header-meta">
+        <div v-if="analyticsLoading" class="reports-loading-hint">Загрузка…</div>
+        <template v-else>
         <div class="summary-item">
           <div class="type-label">Простои: записей</div>
           <div class="type-value">{{ events.length }}</div>
@@ -332,6 +367,7 @@ function formatDate(iso: string): string {
           <div class="type-label">Операции: время</div>
           <div class="type-value">{{ totalOpsHoursLabel }}</div>
         </div>
+        </template>
       </div>
     </header>
 
@@ -837,6 +873,15 @@ function formatDate(iso: string): string {
   background: var(--danger-red);
 }
 
+.reports-role-hint {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--accent-green);
+}
+.reports-loading-hint {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
 .reports-header {
   padding-bottom: var(--space-md);
   border-bottom: 1px solid var(--border-color);

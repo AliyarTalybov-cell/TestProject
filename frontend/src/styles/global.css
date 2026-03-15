@@ -163,13 +163,14 @@ a {
 .app-topbar-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
+/* Единая высота строки для иконки, блока пользователя и аватара */
 .topbar-icon-btn {
   width: 36px;
   height: 36px;
-  border-radius: 999px;
+  border-radius: 50%;
   border: none;
   background: transparent;
   display: inline-flex;
@@ -178,6 +179,7 @@ a {
   cursor: pointer;
   color: var(--text-secondary);
   transition: color 0.2s ease, background 0.2s ease;
+  flex-shrink: 0;
 }
 
 .topbar-icon-btn:hover {
@@ -205,6 +207,8 @@ a {
 }
 
 .topbar-icon-btn svg {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
 }
 
@@ -213,19 +217,21 @@ a {
   align-items: center;
   gap: 12px;
   padding-left: 16px;
+  margin-left: 4px;
   border-left: 1px solid var(--topbar-border);
+  min-height: 36px;
 }
 
 .topbar-user-avatar {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   background: var(--agri-primary);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   flex-shrink: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
@@ -233,26 +239,27 @@ a {
 
 .topbar-user-meta {
   display: flex;
-  flex-direction: column;
-  gap: 0;
-  align-items: flex-end;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .topbar-user-name {
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-primary);
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .topbar-user-role {
   font-size: 0.75rem;
   color: var(--text-secondary);
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .topbar-logout {
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   color: var(--text-secondary);
   background: none;
   border: none;
@@ -260,7 +267,6 @@ a {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
-  margin-top: 2px;
 }
 .topbar-logout:hover {
   color: var(--text-primary);
@@ -278,7 +284,8 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 20px 24px;
+  min-height: 80px;
+  padding: 0 24px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--sidebar-border);
 }
@@ -1292,6 +1299,9 @@ a {
     padding: 0 20px;
     min-height: 64px;
   }
+  .sidebar-brand {
+    min-height: 64px;
+  }
   .main-content-inner {
     padding: 20px;
   }
@@ -1300,6 +1310,9 @@ a {
 @media (max-width: 768px) {
   .app-topbar {
     padding: 0 16px;
+    min-height: 56px;
+  }
+  .sidebar-brand {
     min-height: 56px;
   }
   .app-topbar-title {

@@ -2,7 +2,11 @@
 import { computed, ref, onMounted, onActivated } from 'vue'
 import type { StoredDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { loadEvents } from '@/lib/downtimeStorage'
+import { useAuth } from '@/stores/auth'
+import { isSupabaseConfigured, loadDowntimesFromSupabase } from '@/lib/analyticsSupabase'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
+
+const auth = useAuth()
 
 type DateRangeKey = 'today' | 'week' | 'month'
 type DowntimeStatus = 'active' | 'resolved'
@@ -46,14 +50,26 @@ function mapStoredToEvent(e: StoredDowntime): DowntimeEvent {
   }
 }
 
-function loadDashboardEvents(): DowntimeEvent[] {
+async function loadDashboardEvents(): Promise<DowntimeEvent[]> {
+  if (isSupabaseConfigured() && auth.user.value) {
+    try {
+      const onlyMine = auth.userRole.value === 'worker'
+      const list = await loadDowntimesFromSupabase(onlyMine, auth.user.value.id)
+      return list.map(mapStoredToEvent)
+    } catch {
+      return loadEvents().map(mapStoredToEvent)
+    }
+  }
   return loadEvents().map(mapStoredToEvent)
 }
 
-const events = ref<DowntimeEvent[]>(loadDashboardEvents())
+const events = ref<DowntimeEvent[]>([])
 
-onActivated(() => {
-  events.value = loadDashboardEvents()
+onMounted(async () => {
+  events.value = await loadDashboardEvents()
+})
+onActivated(async () => {
+  events.value = await loadDashboardEvents()
 })
 
 const activeRange = ref<DateRangeKey>('today')

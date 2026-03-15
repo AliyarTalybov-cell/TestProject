@@ -1,5 +1,17 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onActivated } from 'vue'
+import { useAuth } from '@/stores/auth'
+import {
+  isSupabaseConfigured,
+  loadProfiles,
+  upsertMyProfile,
+  loadTasksFromSupabase,
+  tasksWithAssignees,
+  createTask as createTaskApi,
+  updateTask as updateTaskApi,
+  deleteTask as deleteTaskApi,
+} from '@/lib/tasksSupabase'
+import type { Task as TaskType, ProfileRow } from '@/lib/tasksSupabase'
 
 type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine' | 'overdue' | 'by_field' | 'by_employee'
@@ -12,20 +24,13 @@ interface AssigneeOption {
   initials: string
 }
 
-interface Task {
-  id: string
-  title: string
-  assignee: { name: string; initials: string }
-  priority: Priority
-  field: string
-  dueDate: string
-  status: Status
-  workType?: string
-  description?: string
-}
+type Task = TaskType
 
+const auth = useAuth()
 const viewMode = ref<ViewMode>('kanban')
 const activeFilter = ref<FilterKey>('all')
+const filterEmployeeId = ref<string>('')
+const filterStatus = ref<Status | ''>('')
 const showCreateModal = ref(false)
 const editingTaskId = ref<string | null>(null)
 const selectedTaskId = ref<string | null>(null)
@@ -33,18 +38,64 @@ const dragTaskId = ref<string | null>(null)
 const dragOverColumn = ref<Status | null>(null)
 let clickAfterDragGuard = false
 
-const assignees: AssigneeOption[] = [
-  { id: '1', name: 'Иван Петров', initials: 'ИП' },
-  { id: '2', name: 'Алексей С.', initials: 'АС' },
-  { id: '3', name: 'Сергей Мартынов', initials: 'СМ' },
-  { id: '4', name: 'Елена В.', initials: 'ЕВ' },
-  { id: '5', name: 'Иван В.', initials: 'ИВ' },
-  { id: '6', name: 'Петр В.', initials: 'ПВ' },
-  { id: '7', name: 'Лидия Н.', initials: 'ЛН' },
-  { id: '8', name: 'Михаил К.', initials: 'МК' },
-  { id: '9', name: 'Ольга Т.', initials: 'ОТ' },
-  { id: '10', name: 'Дмитрий П.', initials: 'ДП' },
-]
+const tasksLoading = ref(true)
+const tasks = ref<Task[]>([])
+const profiles = ref<ProfileRow[]>([])
+const assignees = computed<AssigneeOption[]>(() => {
+  if (!auth.user.value) return []
+  const list = profiles.value.map((p) => ({
+    id: p.id,
+    name: p.display_name || p.email,
+    initials: p.display_name
+      ? (p.display_name.trim().split(/\s+/).length >= 2
+          ? (p.display_name.trim().split(/\s+/)[0][0] + p.display_name.trim().split(/\s+/)[1][0]).toUpperCase()
+          : p.display_name.trim().slice(0, 2).toUpperCase())
+      : p.email.slice(0, 2).toUpperCase(),
+  }))
+  if (!isManager.value) {
+    const me = auth.user.value
+    const email = me.email ?? ''
+    const name = (me.user_metadata?.full_name as string) || email
+    return [{ id: me.id, name, initials: name.slice(0, 2).toUpperCase() }]
+  }
+  return list
+})
+const currentUserAssignee = computed<AssigneeOption | null>(() => {
+  if (!auth.user.value) return null
+  const me = auth.user.value
+  const email = me.email ?? ''
+  const name = (me.user_metadata?.full_name as string) || email
+  return { id: me.id, name, initials: name.slice(0, 2).toUpperCase() }
+})
+
+const isManager = computed(() => auth.userRole.value === 'manager')
+
+async function loadData() {
+  if (!isSupabaseConfigured() || !auth.user.value) {
+    tasks.value = []
+    tasksLoading.value = false
+    return
+  }
+  tasksLoading.value = true
+  try {
+    const user = auth.user.value
+    await upsertMyProfile(
+      user.id,
+      user.email ?? '',
+      (user.user_metadata?.full_name as string) ?? null,
+      (user.user_metadata?.role as string) ?? null,
+    )
+    const profileList = await loadProfiles()
+    profiles.value = profileList
+    const onlyMine = auth.userRole.value === 'worker'
+    const rows = await loadTasksFromSupabase(onlyMine, user.id)
+    tasks.value = tasksWithAssignees(rows, profileList)
+  } catch {
+    tasks.value = []
+  } finally {
+    tasksLoading.value = false
+  }
+}
 
 const fields = [
   'Поле 1', 'Поле 2', 'Поле 3', 'Поле 5', 'Поле 12', 'Поле 15', 'Участок 3',
@@ -68,74 +119,12 @@ const statusColumns: { key: Status; title: string }[] = [
   { key: 'done', title: 'Выполнено' },
 ]
 
-const tasks = ref<Task[]>([
-  {
-    id: '1',
-    title: 'Обработка поля №5 гербицидами',
-    assignee: { name: 'Иван Петров', initials: 'ИП' },
-    priority: 'high',
-    field: 'Поле 5',
-    dueDate: '15 янв',
-    status: 'todo',
-    workType: 'Опрыскивание',
-  },
-  {
-    id: '2',
-    title: 'Проверка всходов озимой пшеницы',
-    assignee: { name: 'Алексей С.', initials: 'АС' },
-    priority: 'medium',
-    field: 'Поле 12',
-    dueDate: '18 янв',
-    status: 'in_progress',
-    workType: 'Осмотр',
-  },
-  {
-    id: '3',
-    title: 'Ремонт трактора John Deere 8R',
-    assignee: { name: 'Сергей М.', initials: 'СМ' },
-    priority: 'high',
-    field: 'Гараж',
-    dueDate: '12 янв',
-    status: 'in_progress',
-    workType: 'Техника',
-    description: 'Просрочено',
-  },
-  {
-    id: '4',
-    title: 'Отчёт по расходу удобрений за месяц',
-    assignee: { name: 'Елена В.', initials: 'ЕВ' },
-    priority: 'low',
-    field: 'Офис',
-    dueDate: '20 янв',
-    status: 'review',
-    workType: 'Документы',
-  },
-  {
-    id: '5',
-    title: 'Подготовка техники к посевной',
-    assignee: { name: 'Иван В.', initials: 'ИВ' },
-    priority: 'high',
-    field: 'База',
-    dueDate: '10 марта',
-    status: 'todo',
-    workType: 'Обслуживание',
-  },
-  {
-    id: '6',
-    title: 'Опрыскивание озимой пшеницы',
-    assignee: { name: 'Петр В.', initials: 'ПВ' },
-    priority: 'medium',
-    field: 'Поле 12',
-    dueDate: '12 марта',
-    status: 'todo',
-  },
-])
-
-let nextTaskId = 7
+onMounted(loadData)
+onActivated(loadData)
 
 const form = ref({
   title: '',
-  assigneeId: assignees[0].id,
+  assigneeId: '',
   field: fields[0],
   priority: 'medium' as Priority,
   dueDate: '',
@@ -148,8 +137,15 @@ const filteredTasks = computed(() => {
   if (activeFilter.value === 'overdue') {
     list = list.filter((t) => t.description === 'Просрочено')
   }
-  if (activeFilter.value === 'mine') {
-    list = list.filter((t) => t.assignee.initials === 'АС')
+  if (activeFilter.value === 'mine' && auth.user.value) {
+    const myId = auth.user.value.id
+    list = list.filter((t) => (t.assignee as { id?: string }).id === myId)
+  }
+  if (filterEmployeeId.value) {
+    list = list.filter((t) => (t.assignee as { id?: string }).id === filterEmployeeId.value)
+  }
+  if (filterStatus.value) {
+    list = list.filter((t) => t.status === filterStatus.value)
   }
   return list
 })
@@ -176,9 +172,12 @@ const selectedTask = computed(() =>
 function openCreate() {
   editingTaskId.value = null
   const d = new Date()
+  const defaultAssigneeId = !isManager.value && currentUserAssignee.value
+    ? currentUserAssignee.value.id
+    : (assignees.value[0]?.id ?? '')
   form.value = {
     title: '',
-    assigneeId: assignees[0].id,
+    assigneeId: defaultAssigneeId,
     field: fields[0],
     priority: 'medium',
     dueDate: d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'),
@@ -191,13 +190,13 @@ function openCreate() {
 function openEdit() {
   const task = selectedTask.value
   if (!task) return
-  const assignee = assignees.find((a) => a.initials === task.assignee.initials) ?? assignees[0]
+  const assigneeId = (task.assignee as { id?: string }).id ?? assignees.value[0]?.id ?? ''
   form.value = {
     title: task.title,
-    assigneeId: assignee.id,
+    assigneeId,
     field: task.field,
     priority: task.priority,
-    dueDate: task.dueDate,
+    dueDate: task.dueDate === '—' ? '' : task.dueDate,
     workType: task.workType ?? workTypes[0],
     description: task.description ?? '',
   }
@@ -211,34 +210,58 @@ function closeCreate() {
   editingTaskId.value = null
 }
 
-function createTask() {
+async function createTask() {
   const title = form.value.title.trim()
   if (!title) return
-  const assignee = assignees.find((a) => a.id === form.value.assigneeId) ?? assignees[0]
+  const assignee = assignees.value.find((a) => a.id === form.value.assigneeId) ?? assignees.value[0]
+  if (!assignee) return
   if (editingTaskId.value) {
-    const t = tasks.value.find((x) => x.id === editingTaskId.value)
-    if (t) {
-      t.title = title
-      t.assignee = { name: assignee.name, initials: assignee.initials }
-      t.priority = form.value.priority
-      t.field = form.value.field
-      t.dueDate = form.value.dueDate || '—'
-      t.workType = form.value.workType || undefined
-      t.description = form.value.description.trim() || undefined
+    if (!isSupabaseConfigured()) return
+    try {
+      const payload: Parameters<typeof updateTaskApi>[1] = {
+        title,
+        priority: form.value.priority,
+        field: form.value.field,
+        due_date: form.value.dueDate || '—',
+        work_type: form.value.workType,
+        description: form.value.description.trim() || undefined,
+      }
+      if (isManager.value && assignee.id) payload.assignee_id = assignee.id
+      await updateTaskApi(editingTaskId.value, payload)
+      await loadData()
+    } catch {
+      // fallback: update local
+      const t = tasks.value.find((x) => x.id === editingTaskId.value)
+      if (t) {
+        t.title = title
+        t.assignee = { id: assignee.id, name: assignee.name, initials: assignee.initials }
+        t.priority = form.value.priority
+        t.field = form.value.field
+        t.dueDate = form.value.dueDate || '—'
+        t.workType = form.value.workType || undefined
+        t.description = form.value.description.trim() || undefined
+      }
     }
   } else {
-    const newTask: Task = {
-      id: String(++nextTaskId),
-      title,
-      assignee: { name: assignee.name, initials: assignee.initials },
-      priority: form.value.priority,
-      field: form.value.field,
-      dueDate: form.value.dueDate || '—',
-      status: 'todo',
-      workType: form.value.workType || undefined,
-      description: form.value.description.trim() || undefined,
+    if (!isSupabaseConfigured() || !auth.user.value) return
+    try {
+      await createTaskApi(
+        {
+          title,
+          priority: form.value.priority,
+          field: form.value.field,
+          due_date: form.value.dueDate || '—',
+          status: 'todo',
+          work_type: form.value.workType,
+          description: form.value.description.trim() || undefined,
+        },
+        assignee.id,
+        auth.user.value.id,
+      )
+      await loadData()
+    } catch {
+      // skip if no Supabase
     }
-    tasks.value.push(newTask)
   }
   closeCreate()
 }
@@ -251,15 +274,31 @@ function closeTask() {
   selectedTaskId.value = null
 }
 
-function updateTaskStatus(taskId: string, newStatus: Status) {
+async function updateTaskStatus(taskId: string, newStatus: Status) {
   const t = tasks.value.find((x) => x.id === taskId)
   if (t) t.status = newStatus
+  if (isSupabaseConfigured()) {
+    try {
+      await updateTaskApi(taskId, { status: newStatus })
+    } catch {
+      if (t) t.status = t.status
+    }
+  }
 }
 
-function deleteTask() {
+async function deleteTask() {
   if (!selectedTaskId.value) return
   if (!confirm('Удалить эту задачу?')) return
-  tasks.value = tasks.value.filter((t) => t.id !== selectedTaskId.value)
+  if (isSupabaseConfigured()) {
+    try {
+      await deleteTaskApi(selectedTaskId.value)
+      await loadData()
+    } catch {
+      tasks.value = tasks.value.filter((t) => t.id !== selectedTaskId.value)
+    }
+  } else {
+    tasks.value = tasks.value.filter((t) => t.id !== selectedTaskId.value)
+  }
   closeTask()
 }
 
@@ -320,6 +359,41 @@ function statusClass(s: Status) {
             {{ f.label }}
           </button>
         </div>
+        <div class="task-filter-selects">
+          <label v-if="isManager" class="task-filter-select-wrap">
+            <span class="task-filter-select-label">Сотрудник</span>
+            <select
+              v-model="filterEmployeeId"
+              class="task-filter-select"
+              :disabled="!assignees.length"
+            >
+              <option value="">Все сотрудники</option>
+              <option
+                v-for="a in assignees"
+                :key="a.id"
+                :value="a.id"
+              >
+                {{ a.name }}
+              </option>
+            </select>
+          </label>
+          <label class="task-filter-select-wrap">
+            <span class="task-filter-select-label">Статус</span>
+            <select
+              v-model="filterStatus"
+              class="task-filter-select"
+            >
+              <option value="">Все статусы</option>
+              <option
+                v-for="col in statusColumns"
+                :key="col.key"
+                :value="col.key"
+              >
+                {{ col.title }}
+              </option>
+            </select>
+          </label>
+        </div>
         <div class="task-view-toggle">
           <button
             type="button"
@@ -328,7 +402,7 @@ function statusClass(s: Status) {
             aria-label="Канбан"
             @click="viewMode = 'kanban'"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect width="7" height="7" x="3" y="3" rx="1"/>
               <rect width="7" height="7" x="14" y="3" rx="1"/>
               <rect width="7" height="7" x="14" y="14" rx="1"/>
@@ -343,7 +417,7 @@ function statusClass(s: Status) {
             aria-label="Список"
             @click="viewMode = 'list'"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="8" x2="21" y1="6" y2="6"/>
               <line x1="8" x2="21" y1="12" y2="12"/>
               <line x1="8" x2="21" y1="18" y2="18"/>
@@ -356,13 +430,14 @@ function statusClass(s: Status) {
         </div>
       </div>
       <button type="button" class="task-btn-create" @click="openCreate">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+        <svg class="task-header-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
         Создать задачу
       </button>
     </header>
 
+    <p v-if="tasksLoading" class="task-loading-hint">Загрузка задач…</p>
     <!-- Kanban -->
-    <div v-show="viewMode === 'kanban'" class="task-kanban">
+    <div v-show="viewMode === 'kanban' && !tasksLoading" class="task-kanban">
       <div
         v-for="col in statusColumns"
         :key="col.key"
@@ -423,7 +498,7 @@ function statusClass(s: Status) {
     </div>
 
     <!-- List -->
-    <div v-show="viewMode === 'list'" class="task-list-wrap">
+    <div v-show="viewMode === 'list' && !tasksLoading" class="task-list-wrap">
       <div class="task-list-table-wrapper">
         <table class="task-list-table">
           <thead>
@@ -487,12 +562,13 @@ function statusClass(s: Status) {
             <div class="task-form-row task-form-row--two">
               <div class="task-form-field">
                 <label class="task-form-label">Исполнитель</label>
-                <div class="task-form-select-wrap">
-                  <span class="task-form-avatar">{{ (assignees.find(a => a.id === form.assigneeId) ?? assignees[0]).initials }}</span>
+                <div v-if="isManager" class="task-form-select-wrap">
+                  <span class="task-form-avatar">{{ (assignees.find(a => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}</span>
                   <select v-model="form.assigneeId" class="task-form-select">
                     <option v-for="a in assignees" :key="a.id" :value="a.id">{{ a.name }}</option>
                   </select>
                 </div>
+                <div v-else class="task-form-static-assignee">Назначить себе</div>
               </div>
               <div class="task-form-field">
                 <label class="task-form-label">Объект / поле</label>
@@ -600,7 +676,25 @@ function statusClass(s: Status) {
   gap: var(--space-xl);
 }
 
+.task-loading-hint {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.task-form-static-assignee {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* Единая высота и стиль элементов шапки задач */
 .task-header {
+  --task-control-h: 38px;
+  --task-control-radius: 10px;
+  --task-control-fs: 0.875rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -615,6 +709,50 @@ function statusClass(s: Status) {
   gap: var(--space-lg);
 }
 
+.task-header-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.task-filter-selects {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.task-filter-select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-filter-select-label {
+  font-size: var(--task-control-fs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.task-filter-select {
+  height: var(--task-control-h);
+  min-width: 140px;
+  padding: 0 12px;
+  border-radius: var(--task-control-radius);
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: var(--task-control-fs);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.task-filter-select:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .task-filter-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -622,12 +760,15 @@ function statusClass(s: Status) {
 }
 
 .task-filter-tab {
-  padding: 8px 14px;
-  border-radius: 999px;
+  height: var(--task-control-h);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: var(--task-control-radius);
   border: 1px solid var(--border-color);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--task-control-fs);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
@@ -646,8 +787,8 @@ function statusClass(s: Status) {
 
 .task-view-toggle {
   display: flex;
-  gap: 0;
-  border-radius: 10px;
+  height: var(--task-control-h);
+  border-radius: var(--task-control-radius);
   overflow: hidden;
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
@@ -657,11 +798,11 @@ function statusClass(s: Status) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 0 14px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--task-control-fs);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
@@ -672,25 +813,27 @@ function statusClass(s: Status) {
 }
 
 .task-view-btn--active {
-  background: var(--text-primary);
+  background: var(--accent-green);
+  border-color: var(--accent-green);
   color: #fff;
 }
 
 [data-theme='dark'] .task-view-btn--active {
-  background: rgba(255, 255, 255, 0.9);
-  color: var(--agri-bg);
+  background: var(--accent-green);
+  color: #fff;
 }
 
 .task-btn-create {
+  height: var(--task-control-h);
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 18px;
-  border-radius: 10px;
+  padding: 0 18px;
+  border-radius: var(--task-control-radius);
   border: none;
   background: var(--accent-green);
   color: #fff;
-  font-size: 0.9375rem;
+  font-size: var(--task-control-fs);
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.15s ease;
@@ -698,10 +841,6 @@ function statusClass(s: Status) {
 
 .task-btn-create:hover {
   background: var(--accent-green-hover);
-}
-
-.task-btn-create svg {
-  flex-shrink: 0;
 }
 
 /* Kanban */

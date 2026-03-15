@@ -115,3 +115,25 @@ create policy "Allow all for work_operations" on public.work_operations
 ```
 
 После успешного выполнения обнови страницу «Поля» — блок справочников должен загрузиться без ошибки.
+
+## 8. Роли: Работник и Руководитель
+
+При регистрации пользователь выбирает роль **Работник** или **Руководитель**. Руководитель видит в аналитике и на дашборде данные по всем сотрудникам; работник — только свои. Роль хранится в `user_metadata.role` (значения `worker` или `manager`).
+
+Чтобы назначить роль уже существующему пользователю: в Supabase открой **Authentication** → **Users** → выбери пользователя → **Edit** → в **User Metadata** добавь поле `role` со значением `worker` или `manager`.
+
+Если таблицы `downtimes` и `operations` были созданы раньше (без колонки `user_id`), выполни в SQL Editor:
+```sql
+alter table public.downtimes add column if not exists user_id uuid references auth.users(id);
+alter table public.operations add column if not exists user_id uuid references auth.users(id);
+```
+Иначе руководитель не сможет видеть записи по сотрудникам, а новые записи не будут привязываться к пользователю.
+
+## 9. Задачи (страница «Задачи»)
+
+В `schema.sql` добавлены таблицы **profiles** и **tasks**. Выполни их создание в SQL Editor (см. конец файла).
+
+- **profiles** — профили пользователей (синхронизируются при открытии страницы Задачи): id (auth.users), email, display_name, role. Нужны для выбора исполнителя у руководителя.
+- **tasks** — задачи: assignee_id (исполнитель), created_by (кто создал), title, priority, field, due_date, status, work_type, description.
+
+Руководитель видит все задачи и может создавать задачу любому пользователю из списка (список берётся из profiles). Работник видит только свои задачи и может создавать задачу только себе.

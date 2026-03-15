@@ -10,6 +10,7 @@ const auth = useAuth()
 const mode = ref<'login' | 'register'>('login')
 const email = ref('')
 const password = ref('')
+const role = ref<'worker' | 'manager'>('worker')
 const error = ref<string | null>(null)
 const loading = ref(false)
 
@@ -41,7 +42,7 @@ async function submit() {
     if (mode.value === 'login') {
       await auth.login(trimmedEmail, trimmedPassword)
     } else {
-      await auth.register(trimmedEmail, trimmedPassword)
+      await auth.register(trimmedEmail, trimmedPassword, role.value)
     }
     const redirect = (route.query.redirect as string) || '/dashboard'
     router.push(redirect)
@@ -83,6 +84,14 @@ async function submit() {
             placeholder="Не менее 6 символов"
             class="login-input"
           />
+        </label>
+        <label v-if="mode === 'register'" class="login-field">
+          <span class="login-label">Роль</span>
+          <select v-model="role" class="login-input login-select">
+            <option value="worker">Работник</option>
+            <option value="manager">Руководитель</option>
+          </select>
+          <span class="login-hint">Работник видит только свою аналитику, руководитель — по всем сотрудникам.</span>
         </label>
         <div v-if="error" class="login-error">{{ error }}</div>
         <button type="submit" class="login-submit" :disabled="loading">
@@ -133,6 +142,19 @@ async function submit() {
 .login-input::placeholder {
   color: var(--text-secondary);
   opacity: 0.8;
+}
+.login-select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 36px;
+}
+.login-hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
 }
 .login-error {
   color: var(--danger-red);

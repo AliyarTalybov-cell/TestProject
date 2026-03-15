@@ -9,6 +9,7 @@ import {
 } from '@/lib/operationStorage'
 import { loadDowntimeReasons, loadWorkOperations, isSupabaseConfigured } from '@/lib/reasonsAndOperations'
 import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperations'
+import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
 import { useAuth } from '@/stores/auth'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
@@ -166,7 +167,7 @@ function stopDowntime() {
   const start = new Date(active.value.startISO)
   const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
 
-  appendEvent({
+  const event = {
     id: active.value.id,
     employee: active.value.employee,
     reason: active.value.reason,
@@ -174,7 +175,14 @@ function stopDowntime() {
     startISO: active.value.startISO,
     endISO: now.toISOString(),
     durationMinutes,
-  })
+    fieldId: active.value.fieldId,
+    fieldName: active.value.fieldName,
+    operation: active.value.operation,
+  }
+  appendEvent(event)
+  if (isSupabaseConfigured()) {
+    insertDowntime(event, auth.user.value?.id ?? null).catch(() => {})
+  }
 
   active.value = null
   saveActive(null)
@@ -220,7 +228,7 @@ function stopOperation() {
   const start = new Date(workStartedAt.value)
   const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
   const field = currentField.value
-  appendOperation({
+  const op = {
     id: now.getTime(),
     employee: employeeDisplayName.value,
     fieldId: field?.id,
@@ -229,7 +237,11 @@ function stopOperation() {
     startISO: workStartedAt.value,
     endISO: now.toISOString(),
     durationMinutes,
-  })
+  }
+  appendOperation(op)
+  if (isSupabaseConfigured()) {
+    insertOperation(op, auth.user.value?.id ?? null).catch(() => {})
+  }
   saveActiveOperation(null)
   workStartedAt.value = null
 }
