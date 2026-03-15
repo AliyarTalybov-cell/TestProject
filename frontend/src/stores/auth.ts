@@ -56,6 +56,11 @@ export function useAuth() {
     await supabase.auth.signOut()
     user.value = null
     profileCache.value = null
+    try {
+      localStorage.removeItem('agro:profile')
+    } catch {
+      /* ignore */
+    }
   }
 
   /** Смена пароля: проверка текущего и установка нового */

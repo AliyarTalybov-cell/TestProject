@@ -11,7 +11,7 @@ import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
 import EquipmentPage from '@/pages/EquipmentPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
-import { getAuthUser } from '@/stores/auth'
+import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
 export const routes = [
@@ -34,8 +34,13 @@ export const router = createRouter({
   routes: routes as unknown as any,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   if (!isSupabaseConfigured()) return true
+  let waited = 0
+  while (isAuthLoading() && waited < 3000) {
+    await new Promise((r) => setTimeout(r, 50))
+    waited += 50
+  }
   const user = getAuthUser()
   if (to.meta.public && user) return { name: 'dashboard' }
   if (!to.meta.public && !user) return { name: 'login', query: { redirect: to.fullPath } }

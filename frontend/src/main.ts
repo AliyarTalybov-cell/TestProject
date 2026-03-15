@@ -12,8 +12,8 @@ document.documentElement.setAttribute('data-theme', theme)
 document.documentElement.style.colorScheme = theme
 
 const auth = useAuth()
+auth.startAuthListener()
 auth.init().then(() => {
-  auth.startAuthListener()
   createApp(App).use(router).mount('#app')
 })
 

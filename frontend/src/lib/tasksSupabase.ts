@@ -64,15 +64,58 @@ export async function loadProfiles(): Promise<ProfileRow[]> {
   return (data ?? []) as ProfileRow[]
 }
 
+const PROFILE_FULL_COLUMNS = 'id, email, display_name, role, phone, position, additional_info, created_at, updated_at'
+const PROFILE_MIN_COLUMNS = 'id, email, display_name, role, created_at, updated_at'
+
 export async function loadProfileById(userId: string): Promise<ProfileRow | null> {
   if (!supabase) return null
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, display_name, role, phone, position, additional_info, created_at, updated_at')
+    .select(PROFILE_FULL_COLUMNS)
     .eq('id', userId)
     .maybeSingle()
+  if (!error) {
+    return data as ProfileRow | null
+  }
+  const isColumnError = error.code === '42703' || /column .* does not exist/i.test(error.message)
+  if (isColumnError) {
+    const { data: fallback, error: err2 } = await supabase
+      .from('profiles')
+      .select(PROFILE_MIN_COLUMNS)
+      .eq('id', userId)
+      .maybeSingle()
+    if (err2) return null
+    if (!fallback) return null
+    return {
+      ...fallback,
+      phone: null,
+      position: null,
+      additional_info: null,
+    } as ProfileRow
+  }
+  throw error
+}
+
+/** Создаёт или обновляет только базовые поля профиля (если в БД ещё нет колонок phone/position). */
+export async function ensureProfileRow(
+  userId: string,
+  email: string,
+  displayName: string | null,
+  role: string | null,
+): Promise<void> {
+  if (!supabase) return
+  const name = displayName?.trim() || null
+  const { error } = await supabase.from('profiles').upsert(
+    {
+      id: userId,
+      email,
+      display_name: name,
+      role,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'id' },
+  )
   if (error) throw error
-  return data as ProfileRow | null
 }
 
 export async function upsertMyProfile(
@@ -87,20 +130,30 @@ export async function upsertMyProfile(
   const phone = opts?.phone != null ? String(opts.phone).trim() || null : null
   const position = opts?.position != null ? String(opts.position).trim() || null : null
   const additionalInfo = opts?.additionalInfo != null ? String(opts.additionalInfo).trim() || null : null
-  const { error } = await supabase.from('profiles').upsert(
-    {
-      id: userId,
-      email,
-      display_name: name,
-      role,
-      phone,
-      position,
-      additional_info: additionalInfo,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'id' },
-  )
-  if (error) throw error
+  try {
+    const { error } = await supabase.from('profiles').upsert(
+      {
+        id: userId,
+        email,
+        display_name: name,
+        role,
+        phone,
+        position,
+        additional_info: additionalInfo,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'id' },
+    )
+    if (error) throw error
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string }
+    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
+    if (isColumnError) {
+      await ensureProfileRow(userId, email, name, role)
+      return
+    }
+    throw e
+  }
 }
 
 export async function loadTasksFromSupabase(

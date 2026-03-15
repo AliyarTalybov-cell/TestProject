@@ -170,7 +170,7 @@ watch(mobileMenuOpen, (open) => {
       <div class="main-content-inner main-content-inner--animated">
         <RouterView v-slot="{ Component }">
           <Transition name="page" mode="out-in">
-            <component :is="Component" />
+            <component v-if="Component" :is="Component" :key="$route.fullPath" />
           </Transition>
         </RouterView>
       </div>
