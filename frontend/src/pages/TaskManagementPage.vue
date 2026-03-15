@@ -3,6 +3,7 @@ import { computed, ref, watch, onMounted, onActivated } from 'vue'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import { useAuth } from '@/stores/auth'
+import CalendarPopover from '@/components/CalendarPopover.vue'
 import {
   isSupabaseConfigured,
   loadProfiles,
@@ -45,6 +46,8 @@ const filterEmployeeId = ref<string>('')
 const filterStatus = ref<Status | ''>('')
 const filterDateFrom = ref<string>(weekAgo)
 const filterDateTo = ref<string>(today)
+const dateFromInput = ref<string>(weekAgo)
+const dateToInput = ref<string>(today)
 const searchTaskNumber = ref('')
 let searchByNumberTimeout: ReturnType<typeof setTimeout> | null = null
 const currentPage = ref(1)
@@ -106,7 +109,10 @@ async function loadData() {
     const profileList = await loadProfiles()
     profiles.value = profileList
     const onlyMine = auth.userRole.value === 'worker'
-    const rows = await loadTasksFromSupabase(onlyMine, user.id)
+    const rows = await loadTasksFiltered(onlyMine, user.id, {
+      status: filterStatus.value || undefined,
+      assigneeId: filterEmployeeId.value || undefined,
+    })
     tasks.value = tasksWithAssignees(rows, profileList)
   } catch {
     tasks.value = []
@@ -188,6 +194,27 @@ const filteredTasks = computed(() => {
 const totalFiltered = computed(() => filteredTasks.value.length)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 
+const paginationStart = computed(() => (currentPage.value - 1) * pageSize.value + 1)
+const paginationEnd = computed(() =>
+  Math.min(currentPage.value * pageSize.value, totalFiltered.value),
+)
+
+const pageNumbers = computed(() => {
+  const total = totalPages.value
+  const current = currentPage.value
+  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | 'ellipsis')[] = [1]
+  if (current > 2) pages.push('ellipsis')
+  if (current > 1 && current < total) pages.push(current)
+  if (current < total - 1) pages.push('ellipsis')
+  if (total > 1) pages.push(total)
+  return pages
+})
+
+function goToPage(page: number) {
+  currentPage.value = Math.max(1, Math.min(page, totalPages.value))
+}
+
 const paginatedTasks = computed(() => {
   const list = filteredTasks.value
   const start = (currentPage.value - 1) * pageSize.value
@@ -205,11 +232,11 @@ const tasksByStatus = computed(() => {
   return byStatus
 })
 
+/* Номер задачи — стабильная позиция в полном списке (не зависит от фильтра/статуса/страницы) */
 const taskNumbers = computed(() => {
-  const list = paginatedTasks.value
-  const start = (currentPage.value - 1) * pageSize.value
+  const list = tasks.value
   const map: Record<string, number> = {}
-  list.forEach((t, i) => { map[t.id] = start + i + 1 })
+  list.forEach((t, i) => { map[t.id] = i + 1 })
   return map
 })
 function getTaskNumber(taskId: string): number {
@@ -221,12 +248,28 @@ function getTaskNumber(taskId: string): number {
   return taskNumbers.value[taskId] ?? 0
 }
 
+function applyDateFilter() {
+  filterDateFrom.value = dateFromInput.value
+  filterDateTo.value = dateToInput.value
+  currentPage.value = 1
+  const numStr = searchTaskNumber.value.trim()
+  if (numStr && parseInt(numStr, 10) >= 1) {
+    searchTaskByNumber()
+    return
+  }
+  if (isSupabaseConfigured() && auth.user.value) loadData()
+}
+
 watch(
   () => [filterDateFrom.value, filterDateTo.value, filterEmployeeId.value, filterStatus.value, activeFilter.value],
   () => {
     currentPage.value = 1
     const numStr = searchTaskNumber.value.trim()
-    if (numStr && parseInt(numStr, 10) >= 1) searchTaskByNumber()
+    if (numStr && parseInt(numStr, 10) >= 1) {
+      searchTaskByNumber()
+      return
+    }
+    if (isSupabaseConfigured() && auth.user.value) loadData()
   },
 )
 watch(searchTaskNumber, () => { currentPage.value = 1 })
@@ -420,12 +463,13 @@ function closeTask() {
 
 async function updateTaskStatus(taskId: string, newStatus: Status) {
   const t = tasks.value.find((x) => x.id === taskId)
+  const prevStatus = t?.status
   if (t) t.status = newStatus
   if (isSupabaseConfigured()) {
     try {
       await updateTaskApi(taskId, { status: newStatus })
     } catch {
-      if (t) t.status = t.status
+      if (t && prevStatus !== undefined) t.status = prevStatus
     }
   }
 }
@@ -467,11 +511,11 @@ function onDragOver(e: DragEvent, status: Status) {
 function onDragLeave() {
   dragOverColumn.value = null
 }
-function onDrop(e: DragEvent, newStatus: Status) {
+async function onDrop(e: DragEvent, newStatus: Status) {
   e.preventDefault()
   dragOverColumn.value = null
   const taskId = e.dataTransfer?.getData('text/plain')
-  if (taskId) updateTaskStatus(taskId, newStatus)
+  if (taskId) await updateTaskStatus(taskId, newStatus)
 }
 
 function statusTitle(s: Status): string {
@@ -643,19 +687,12 @@ function statusClass(s: Status) {
           </select>
           <div class="task-filter-dates">
             <span class="task-filter-date-label">С</span>
-            <input
-              v-model="filterDateFrom"
-              type="date"
-              class="task-filter-pill task-filter-pill--date"
-              title="Дата с"
-            />
+            <CalendarPopover v-model="dateFromInput" placeholder="Дата с" />
             <span class="task-filter-date-label">По</span>
-            <input
-              v-model="filterDateTo"
-              type="date"
-              class="task-filter-pill task-filter-pill--date"
-              title="Дата по"
-            />
+            <CalendarPopover v-model="dateToInput" placeholder="Дата по" />
+            <button type="button" class="task-filter-tab task-filter-apply-dates" @click="applyDateFilter">
+              Применить
+            </button>
           </div>
         </div>
         <div class="task-view-toggle">
@@ -854,24 +891,90 @@ function statusClass(s: Status) {
       </div>
       <div v-if="totalFiltered > 0" class="task-pagination">
         <span class="task-pagination-info">
-          Страница {{ currentPage }} из {{ totalPages }} (всего {{ totalFiltered }})
+          Показано {{ paginationStart }}–{{ paginationEnd }} из {{ totalFiltered }}
         </span>
-        <div class="task-pagination-controls">
+        <div class="task-pagination-right">
+          <div class="task-pagination-nav">
+            <button
+              type="button"
+              class="task-pagination-arrow"
+              :disabled="currentPage <= 1"
+              aria-label="Предыдущая страница"
+              @click="currentPage = currentPage - 1"
+            >
+              &lt;
+            </button>
+            <template v-for="(p, i) in pageNumbers" :key="p === 'ellipsis' ? `e-${i}` : p">
+              <button
+                v-if="p !== 'ellipsis'"
+                type="button"
+                class="task-pagination-num"
+                :class="{ 'task-pagination-num--active': p === currentPage }"
+                @click="goToPage(p)"
+              >
+                {{ p }}
+              </button>
+              <span v-else class="task-pagination-ellipsis">…</span>
+            </template>
+            <button
+              type="button"
+              class="task-pagination-arrow"
+              :disabled="currentPage >= totalPages"
+              aria-label="Следующая страница"
+              @click="currentPage = currentPage + 1"
+            >
+              &gt;
+            </button>
+          </div>
+          <label class="task-pagination-size">
+            <span class="task-filter-select-label">На странице</span>
+            <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
+              <option :value="5">5</option>
+              <option :value="10">10</option>
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pagination for Kanban (same block, show when kanban visible) -->
+    <div v-show="viewMode === 'kanban' && !tasksLoading && totalFiltered > 0" class="task-pagination task-pagination--kanban">
+      <span class="task-pagination-info">
+        Показано {{ paginationStart }}–{{ paginationEnd }} из {{ totalFiltered }}
+      </span>
+      <div class="task-pagination-right">
+        <div class="task-pagination-nav">
           <button
             type="button"
-            class="task-pagination-btn"
+            class="task-pagination-arrow"
             :disabled="currentPage <= 1"
+            aria-label="Предыдущая страница"
             @click="currentPage = currentPage - 1"
           >
-            Назад
+            &lt;
           </button>
+          <template v-for="(p, i) in pageNumbers" :key="p === 'ellipsis' ? `e-${i}` : p">
+            <button
+              v-if="p !== 'ellipsis'"
+              type="button"
+              class="task-pagination-num"
+              :class="{ 'task-pagination-num--active': p === currentPage }"
+              @click="goToPage(p)"
+            >
+              {{ p }}
+            </button>
+            <span v-else class="task-pagination-ellipsis">…</span>
+          </template>
           <button
             type="button"
-            class="task-pagination-btn"
+            class="task-pagination-arrow"
             :disabled="currentPage >= totalPages"
+            aria-label="Следующая страница"
             @click="currentPage = currentPage + 1"
           >
-            Вперёд
+            &gt;
           </button>
         </div>
         <label class="task-pagination-size">
@@ -884,40 +987,6 @@ function statusClass(s: Status) {
           </select>
         </label>
       </div>
-    </div>
-
-    <!-- Pagination for Kanban (same block, show when kanban visible) -->
-    <div v-show="viewMode === 'kanban' && !tasksLoading && totalFiltered > 0" class="task-pagination task-pagination--kanban">
-      <span class="task-pagination-info">
-        Страница {{ currentPage }} из {{ totalPages }} (всего {{ totalFiltered }})
-      </span>
-      <div class="task-pagination-controls">
-        <button
-          type="button"
-          class="task-pagination-btn"
-          :disabled="currentPage <= 1"
-          @click="currentPage = currentPage - 1"
-        >
-          Назад
-        </button>
-        <button
-          type="button"
-          class="task-pagination-btn"
-          :disabled="currentPage >= totalPages"
-          @click="currentPage = currentPage + 1"
-        >
-          Вперёд
-        </button>
-      </div>
-      <label class="task-pagination-size">
-        <span class="task-filter-select-label">На странице</span>
-        <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
-          <option :value="5">5</option>
-          <option :value="10">10</option>
-          <option :value="20">20</option>
-          <option :value="50">50</option>
-        </select>
-      </label>
     </div>
 
     <!-- Modal: New Task -->
@@ -1179,6 +1248,7 @@ function statusClass(s: Status) {
   margin-left: var(--space-sm);
   padding-left: var(--space-sm);
   border-left: 1px solid var(--border-color);
+  flex-wrap: wrap;
 }
 
 .task-filter-date-label {
@@ -1187,8 +1257,17 @@ function statusClass(s: Status) {
   color: var(--text-secondary);
 }
 
-.task-filter-pill--date {
-  min-width: 130px;
+.task-filter-apply-dates {
+  margin-left: 4px;
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: #fff;
+}
+
+.task-filter-apply-dates:hover {
+  background: var(--accent-green-hover);
+  border-color: var(--accent-green-hover);
+  color: #fff;
 }
 
 .task-filter-pill:disabled {
@@ -1370,10 +1449,12 @@ function statusClass(s: Status) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-md);
-  margin-top: var(--space-lg);
-  padding: var(--space-md) 0;
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
   border-top: 1px solid var(--border-color);
+  min-height: 40px;
 }
 
 .task-pagination--kanban {
@@ -1385,42 +1466,110 @@ function statusClass(s: Status) {
   color: var(--text-secondary);
 }
 
-.task-pagination-controls {
+.task-pagination-right {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
 }
 
-.task-pagination-btn {
-  height: var(--task-control-h);
-  padding: 0 14px;
-  border-radius: var(--task-control-radius);
+.task-pagination-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-pagination-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--border-color);
-  background: var(--bg-panel);
+  border-radius: 8px;
+  background: var(--bg-base);
   color: var(--text-primary);
-  font-size: var(--task-control-fs);
+  font-size: 1rem;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
 
-.task-pagination-btn:hover:not(:disabled) {
-  background: var(--sidebar-hover-bg);
+.task-pagination-arrow:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
   border-color: var(--text-secondary);
 }
 
-.task-pagination-btn:disabled {
+.task-pagination-arrow:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
+.task-pagination-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.task-pagination-num:hover {
+  background: var(--bg-panel-hover);
+}
+
+.task-pagination-num--active {
+  background: rgba(76, 175, 80, 0.15);
+  border-color: rgba(76, 175, 80, 0.5);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .task-pagination-num--active {
+  background: rgba(76, 175, 80, 0.2);
+  border-color: rgba(76, 175, 80, 0.5);
+}
+
+.task-pagination-num--active:hover {
+  background: rgba(76, 175, 80, 0.22);
+}
+
+.task-pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 36px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
 .task-pagination-size {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.task-pagination-size .task-filter-select-label {
+  line-height: 1.5;
 }
 
 .task-pagination-select {
-  min-width: 70px;
+  min-width: 72px;
+  height: 36px;
+  padding: 0 28px 0 10px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
 /* Kanban */
@@ -2489,8 +2638,7 @@ function statusClass(s: Status) {
     margin-top: var(--space-xs);
   }
 
-  .task-filter-pill--select,
-  .task-filter-pill--date {
+  .task-filter-pill--select {
     min-width: 0;
     width: 100%;
     flex: 1;
@@ -2538,12 +2686,17 @@ function statusClass(s: Status) {
     padding: var(--space-md) 0;
   }
 
-  .task-pagination-controls {
+  .task-pagination-info {
+    text-align: center;
+  }
+
+  .task-pagination-right {
     justify-content: center;
   }
 
-  .task-pagination-info {
-    text-align: center;
+  .task-pagination-nav {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 
   .task-pagination-size {
