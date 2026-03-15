@@ -130,6 +130,28 @@ alter table public.equipment enable row level security;
 create policy "Allow all for equipment" on public.equipment
   for all using (true) with check (true);
 
+-- Справочник типов земли (используется в полях и везде на бэкенде)
+create table if not exists public.land_types (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  sort_order int not null default 0,
+  created_at timestamptz default now()
+);
+
+-- Справочник культур (key — для кода/API, label — для отображения)
+create table if not exists public.crops (
+  id uuid primary key default gen_random_uuid(),
+  key text not null unique,
+  label text not null,
+  sort_order int not null default 0,
+  created_at timestamptz default now()
+);
+
+alter table public.land_types enable row level security;
+alter table public.crops enable row level security;
+create policy "Allow all for land_types" on public.land_types for all using (true) with check (true);
+create policy "Allow all for crops" on public.crops for all using (true) with check (true);
+
 -- Поля (сельхозугодья): реестр и назначение ответственных
 create table if not exists public.fields (
   id uuid primary key default gen_random_uuid(),
@@ -138,10 +160,10 @@ create table if not exists public.fields (
   area numeric not null check (area >= 0),
   cadastral_number text,
   location_description text,
-  land_type text not null check (land_type in ('Пашня', 'Залежь', 'Сенокос', 'Пастбище')),
+  land_type text not null,
   sowing_year int check (sowing_year is null or (sowing_year >= 2000 and sowing_year <= 2100)),
   responsible_id uuid references auth.users(id) on delete set null,
-  crop_key text not null check (crop_key in ('wheat', 'corn', 'soy', 'sunflower', 'none', 'meadow')),
+  crop_key text not null,
   scheme_file_url text,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -157,6 +179,14 @@ create policy "Allow all for fields" on public.fields
 
 -- Если таблица fields уже была создана без scheme_file_url, выполни:
 -- alter table public.fields add column if not exists scheme_file_url text;
+
+-- Если таблица fields уже была с CHECK на land_type/crop_key, выполни (снять ограничения):
+-- alter table public.fields drop constraint if exists fields_land_type_check;
+-- alter table public.fields drop constraint if exists fields_crop_key_check;
+
+-- Наполнение справочников при первом запуске (идемпотентно):
+-- insert into public.land_types (name, sort_order) values ('Пашня', 1), ('Залежь', 2), ('Сенокос', 3), ('Пастбище', 4) on conflict (name) do nothing;
+-- insert into public.crops (key, label, sort_order) values ('wheat', 'Пшеница', 1), ('corn', 'Кукуруза', 2), ('soy', 'Соя', 3), ('sunflower', 'Подсолнечник', 4), ('none', 'Нет (пар)', 5), ('meadow', 'Многолетние травы', 6) on conflict (key) do nothing;
 
 -- Если таблицы downtimes/operations уже были созданы без user_id, выполни в SQL Editor:
 -- alter table public.downtimes add column if not exists user_id uuid references auth.users(id);
