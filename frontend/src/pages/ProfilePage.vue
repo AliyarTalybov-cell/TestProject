@@ -1,0 +1,944 @@
+<script setup lang="ts">
+import { computed, ref, watch, onMounted } from 'vue'
+import { useAuth } from '@/stores/auth'
+import type { ProfileRow } from '@/lib/tasksSupabase'
+import { isSupabaseConfigured, loadProfileById, upsertMyProfile } from '@/lib/tasksSupabase'
+
+const POSITIONS = [
+  'Главный агроном',
+  'Агроном',
+  'Инженер',
+  'Механик',
+  'Специалист',
+]
+
+const auth = useAuth()
+const activeTab = ref<'personal' | 'security' | 'notifications'>('personal')
+
+const profileForm = ref({
+  firstName: '',
+  lastName: '',
+  patronymic: '',
+  email: '',
+  phone: '',
+  position: '',
+  additionalInfo: '',
+})
+
+const myProfile = ref<{ display_name: string | null; role: string | null } | null>(null)
+
+const displayName = computed(() => {
+  const name = myProfile.value?.display_name || auth.user.value?.user_metadata?.full_name
+  if (name && typeof name === 'string') return name.trim()
+  const email = auth.user.value?.email ?? ''
+  return email.split('@')[0] || 'Пользователь'
+})
+
+const roleLabel = computed(() => {
+  const role = auth.userRole.value
+  return role === 'manager' ? 'Руководитель' : 'Работник'
+})
+
+const userInitials = computed(() => {
+  const name = displayName.value
+  const parts = name.trim().split(/\s+/)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  if (name.length >= 2) return name.slice(0, 2).toUpperCase()
+  return name.slice(0, 1).toUpperCase() || '?'
+})
+
+const lastSignIn = computed(() => {
+  const u = auth.user.value
+  if (!u) return '—'
+  const last = (u as { last_sign_in_at?: string }).last_sign_in_at
+  if (last) {
+    const d = new Date(last)
+    const today = new Date()
+    const isToday = d.toDateString() === today.toDateString()
+    if (isToday) return `Сегодня, ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+  }
+  return '—'
+})
+
+const createdAt = computed(() => {
+  const u = auth.user.value
+  if (!u?.created_at) return '—'
+  return new Date(u.created_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+})
+
+function applyProfileToForm(p: ProfileRow) {
+  myProfile.value = { display_name: p.display_name, role: p.role }
+  const parts = (p.display_name || '').trim().split(/\s+/)
+  profileForm.value.firstName = parts[0] || ''
+  profileForm.value.lastName = parts[1] || ''
+  profileForm.value.patronymic = parts[2] || ''
+  profileForm.value.phone = p.phone ?? ''
+  profileForm.value.position = p.position || POSITIONS[0]
+  profileForm.value.additionalInfo = p.additional_info ?? ''
+}
+
+async function loadProfile() {
+  const user = auth.user.value
+  if (!user) return
+  profileForm.value.email = user.email ?? ''
+  const cache = auth.profileCache.value
+  if (cache && cache.id === user.id) {
+    applyProfileToForm(cache)
+  }
+  if (isSupabaseConfigured()) {
+    try {
+      const p = await loadProfileById(user.id)
+      if (p) {
+        applyProfileToForm(p)
+        auth.profileCache.value = p
+        return
+      }
+    } catch {
+      /* при ошибке сети/БД оставляем данные из кэша или user_metadata */
+    }
+    if (!cache || cache.id !== user.id) {
+      const fullName = (user.user_metadata?.full_name as string) || ''
+      const parts = fullName.trim().split(/\s+/)
+      profileForm.value.firstName = parts[0] || ''
+      profileForm.value.lastName = parts[1] || ''
+      profileForm.value.patronymic = parts[2] || ''
+      profileForm.value.phone = (user.user_metadata?.phone as string) || ''
+      profileForm.value.position = (user.user_metadata?.position as string) || POSITIONS[0]
+      profileForm.value.additionalInfo = (user.user_metadata?.additional_info as string) || ''
+    }
+    return
+  }
+  if (!cache || cache.id !== user.id) {
+    const fullName = (user.user_metadata?.full_name as string) || ''
+    const parts = fullName.trim().split(/\s+/)
+    profileForm.value.firstName = parts[0] || ''
+    profileForm.value.lastName = parts[1] || ''
+    profileForm.value.patronymic = parts[2] || ''
+    profileForm.value.phone = (user.user_metadata?.phone as string) || ''
+    profileForm.value.position = (user.user_metadata?.position as string) || POSITIONS[0]
+    profileForm.value.additionalInfo = (user.user_metadata?.additional_info as string) || ''
+  }
+}
+
+onMounted(loadProfile)
+watch(() => auth.user.value?.id, (id) => { if (id) loadProfile() })
+
+const saving = ref(false)
+const saveMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
+let saveMessageTimer: ReturnType<typeof setTimeout> | null = null
+const showSaveConfirmModal = ref(false)
+
+const passwordForm = ref({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: '',
+})
+const passwordMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
+const changingPassword = ref(false)
+
+function setSaveMessage(type: 'success' | 'error', text: string) {
+  if (saveMessageTimer) clearTimeout(saveMessageTimer)
+  saveMessage.value = { type, text }
+  saveMessageTimer = setTimeout(() => {
+    saveMessage.value = null
+    saveMessageTimer = null
+  }, 5000)
+}
+
+function openSaveConfirmModal() {
+  showSaveConfirmModal.value = true
+}
+
+function closeSaveConfirmModal() {
+  showSaveConfirmModal.value = false
+}
+
+async function confirmSaveProfile() {
+  if (!auth.user.value) return
+  closeSaveConfirmModal()
+  saveMessage.value = null
+  saving.value = true
+  try {
+    const fullName = [profileForm.value.firstName, profileForm.value.lastName, profileForm.value.patronymic].filter(Boolean).join(' ')
+    if (isSupabaseConfigured()) {
+      await upsertMyProfile(
+        auth.user.value.id,
+        profileForm.value.email,
+        fullName || null,
+        auth.user.value.user_metadata?.role ?? null,
+        {
+          phone: profileForm.value.phone || null,
+          position: profileForm.value.position || null,
+          additionalInfo: profileForm.value.additionalInfo || null,
+        },
+      )
+      await loadProfile()
+    }
+    myProfile.value = myProfile.value ? { ...myProfile.value, display_name: fullName || null } : { display_name: fullName || null, role: null }
+    setSaveMessage('success', 'Изменения успешно сохранены.')
+  } catch (err) {
+    const text = err instanceof Error ? err.message : 'Не удалось сохранить изменения.'
+    setSaveMessage('error', text)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changePassword() {
+  const { currentPassword, newPassword, confirmPassword } = passwordForm.value
+  if (!currentPassword.trim()) {
+    passwordMessage.value = { type: 'error', text: 'Введите текущий пароль.' }
+    return
+  }
+  if (!newPassword.trim()) {
+    passwordMessage.value = { type: 'error', text: 'Введите новый пароль.' }
+    return
+  }
+  if (newPassword.length < 6) {
+    passwordMessage.value = { type: 'error', text: 'Новый пароль должен быть не менее 6 символов.' }
+    return
+  }
+  if (newPassword !== confirmPassword) {
+    passwordMessage.value = { type: 'error', text: 'Новый пароль и подтверждение не совпадают.' }
+    return
+  }
+  if (!isSupabaseConfigured()) {
+    passwordMessage.value = { type: 'error', text: 'Смена пароля недоступна: база данных не подключена.' }
+    return
+  }
+  passwordMessage.value = null
+  changingPassword.value = true
+  try {
+    await auth.updatePassword(currentPassword.trim(), newPassword)
+    passwordMessage.value = { type: 'success', text: 'Пароль успешно изменён.' }
+    passwordForm.value = { currentPassword: '', newPassword: '', confirmPassword: '' }
+  } catch (err) {
+    const text = err instanceof Error ? err.message : 'Не удалось изменить пароль.'
+    passwordMessage.value = { type: 'error', text }
+  } finally {
+    changingPassword.value = false
+  }
+}
+</script>
+
+<template>
+  <section class="profile-page page-enter-item">
+    <header class="profile-header">
+      <h1 class="profile-page-title">Настройки профиля</h1>
+      <p class="profile-page-subtitle">Управляйте своими личными данными и настройками учетной записи.</p>
+    </header>
+
+    <div class="profile-layout">
+      <!-- Левая колонка: карточка пользователя и активность -->
+      <aside class="profile-card-aside">
+        <div class="profile-user-card card-rounded">
+          <div class="profile-avatar">{{ userInitials }}</div>
+          <div class="profile-user-name">{{ displayName }}</div>
+          <div class="profile-user-position">{{ profileForm.position || 'Главный агроном' }}</div>
+          <div class="profile-badge">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            {{ roleLabel }}
+          </div>
+        </div>
+
+        <div class="profile-contact-block card-rounded">
+          <h3 class="profile-block-title">Контактная информация</h3>
+          <div class="profile-contact-row">
+            <svg class="profile-contact-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <span>{{ profileForm.email || auth.user?.email || '—' }}</span>
+          </div>
+          <div class="profile-contact-row">
+            <svg class="profile-contact-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            <span>{{ profileForm.phone || '—' }}</span>
+          </div>
+          <div class="profile-contact-row">
+            <svg class="profile-contact-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+            <span>Агрономическая служба</span>
+          </div>
+        </div>
+
+        <div class="profile-activity-block card-rounded">
+          <h3 class="profile-block-title">Активность аккаунта</h3>
+          <div class="profile-activity-row">
+            <span class="profile-activity-label">Последний вход</span>
+            <span class="profile-activity-value">{{ lastSignIn }}</span>
+          </div>
+          <div class="profile-activity-row">
+            <span class="profile-activity-label">Дата регистрации</span>
+            <span class="profile-activity-value">{{ createdAt }}</span>
+          </div>
+          <div class="profile-activity-row">
+            <span class="profile-activity-label">Статус</span>
+            <span class="profile-status-active"><span class="profile-status-dot"></span>Активен</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Правая колонка: форма -->
+      <div class="profile-form-area card-rounded">
+        <div class="profile-tabs">
+          <button type="button" class="profile-tab" :class="{ 'profile-tab--active': activeTab === 'personal' }" @click="activeTab = 'personal'">Личные данные</button>
+          <button type="button" class="profile-tab" :class="{ 'profile-tab--active': activeTab === 'security' }" @click="activeTab = 'security'">Безопасность</button>
+          <button type="button" class="profile-tab" :class="{ 'profile-tab--active': activeTab === 'notifications' }" @click="activeTab = 'notifications'">Уведомления</button>
+        </div>
+
+        <div v-show="activeTab === 'personal'" class="profile-tab-panel">
+          <h2 class="profile-form-section-title">Основная информация</h2>
+          <p class="profile-form-section-desc">Обновите ваши персональные данные и контактную информацию.</p>
+
+          <div v-if="saveMessage" class="profile-save-message" :class="saveMessage.type === 'success' ? 'profile-save-message--success' : 'profile-save-message--error'" role="alert">
+            <svg v-if="saveMessage.type === 'success'" class="profile-save-message-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            <svg v-else class="profile-save-message-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+            <span>{{ saveMessage.text }}</span>
+          </div>
+
+          <div class="profile-form-grid">
+            <div class="profile-field">
+              <label class="profile-label" for="pf-first">Имя</label>
+              <input id="pf-first" v-model="profileForm.firstName" type="text" class="profile-input" placeholder="Имя" />
+            </div>
+            <div class="profile-field">
+              <label class="profile-label" for="pf-last">Фамилия</label>
+              <input id="pf-last" v-model="profileForm.lastName" type="text" class="profile-input" placeholder="Фамилия" />
+            </div>
+            <div class="profile-field">
+              <label class="profile-label" for="pf-patronymic">Отчество (необязательно)</label>
+              <input id="pf-patronymic" v-model="profileForm.patronymic" type="text" class="profile-input" placeholder="Отчество" />
+            </div>
+            <div class="profile-field profile-field--full">
+              <label class="profile-label" for="pf-email">Электронная почта</label>
+              <div class="profile-input-wrap">
+                <svg class="profile-input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                <input id="pf-email" v-model="profileForm.email" type="email" class="profile-input" placeholder="email@example.com" />
+              </div>
+            </div>
+            <div class="profile-field profile-field--full">
+              <label class="profile-label" for="pf-phone">Номер телефона</label>
+              <div class="profile-input-wrap">
+                <svg class="profile-input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                <input id="pf-phone" v-model="profileForm.phone" type="tel" class="profile-input" placeholder="+7 (___) ___-__-__" />
+              </div>
+            </div>
+            <div class="profile-field">
+              <label class="profile-label" for="pf-position">Должность</label>
+              <select id="pf-position" v-model="profileForm.position" class="profile-input profile-select">
+                <option v-for="p in POSITIONS" :key="p" :value="p">{{ p }}</option>
+              </select>
+            </div>
+            <div class="profile-field profile-field--full">
+              <label class="profile-label profile-label--with-info" for="pf-role">
+                Роль в системе
+                <svg class="profile-info-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" title="Для изменения роли обратитесь в ИТ-отдел"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+              </label>
+              <div class="profile-input-wrap profile-input-wrap--readonly">
+                <svg class="profile-input-icon profile-input-icon--lock" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <input id="pf-role" type="text" class="profile-input" :value="roleLabel" readonly />
+              </div>
+              <p class="profile-field-hint">Для изменения роли обратитесь в ИТ-отдел.</p>
+            </div>
+            <div class="profile-field profile-field--full">
+              <label class="profile-label" for="pf-info">Дополнительная информация</label>
+              <textarea id="pf-info" v-model="profileForm.additionalInfo" class="profile-input profile-textarea" rows="3" placeholder="Краткая информация о себе или обязанностях"></textarea>
+            </div>
+          </div>
+
+          <div class="profile-form-actions">
+            <button type="button" class="profile-btn profile-btn--primary" :disabled="saving" @click="openSaveConfirmModal">
+              {{ saving ? 'Сохранение…' : 'Сохранить изменения' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-show="activeTab === 'security'" class="profile-tab-panel">
+          <h2 class="profile-form-section-title">Безопасность</h2>
+          <p class="profile-form-section-desc">Смена пароля и настройки входа.</p>
+
+          <div class="profile-password-section">
+            <h3 class="profile-password-heading">Смена пароля</h3>
+            <div v-if="passwordMessage" class="profile-save-message" :class="passwordMessage.type === 'success' ? 'profile-save-message--success' : 'profile-save-message--error'" role="alert">
+              <svg v-if="passwordMessage.type === 'success'" class="profile-save-message-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg v-else class="profile-save-message-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+              <span>{{ passwordMessage.text }}</span>
+            </div>
+            <div class="profile-form-grid">
+              <div class="profile-field profile-field--full">
+                <label class="profile-label" for="pw-current">Текущий пароль</label>
+                <input
+                  id="pw-current"
+                  v-model="passwordForm.currentPassword"
+                  type="password"
+                  class="profile-input"
+                  placeholder="Введите текущий пароль"
+                  autocomplete="current-password"
+                />
+              </div>
+              <div class="profile-field profile-field--full">
+                <label class="profile-label" for="pw-new">Новый пароль</label>
+                <input
+                  id="pw-new"
+                  v-model="passwordForm.newPassword"
+                  type="password"
+                  class="profile-input"
+                  placeholder="Не менее 6 символов"
+                  autocomplete="new-password"
+                />
+              </div>
+              <div class="profile-field profile-field--full">
+                <label class="profile-label" for="pw-confirm">Подтвердите новый пароль</label>
+                <input
+                  id="pw-confirm"
+                  v-model="passwordForm.confirmPassword"
+                  type="password"
+                  class="profile-input"
+                  placeholder="Повторите новый пароль"
+                  autocomplete="new-password"
+                />
+              </div>
+            </div>
+            <div class="profile-form-actions">
+              <button
+                type="button"
+                class="profile-btn profile-btn--primary"
+                :disabled="changingPassword || !passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword"
+                @click="changePassword"
+              >
+                {{ changingPassword ? 'Сохранение…' : 'Изменить пароль' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-show="activeTab === 'notifications'" class="profile-tab-panel">
+          <h2 class="profile-form-section-title">Уведомления</h2>
+          <p class="profile-form-section-desc">Настройте способ и частоту уведомлений.</p>
+          <p class="profile-placeholder">Раздел в разработке.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div
+    v-if="showSaveConfirmModal"
+    class="profile-confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="profile-confirm-title"
+    @click.self="closeSaveConfirmModal"
+  >
+    <div class="profile-confirm-modal">
+      <h2 id="profile-confirm-title" class="profile-confirm-title">Вы уверены в изменении данных.</h2>
+      <p class="profile-confirm-text">Изменения будут сохранены в вашем профиле.</p>
+      <div class="profile-confirm-actions">
+        <button type="button" class="profile-btn profile-btn--secondary" @click="closeSaveConfirmModal">
+          Отмена
+        </button>
+        <button type="button" class="profile-btn profile-btn--primary" :disabled="saving" @click="confirmSaveProfile">
+          Да, сохранить
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.profile-page {
+  padding: 0 var(--space-lg);
+  padding-bottom: var(--space-xl);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.profile-header {
+  margin-bottom: var(--space-xl);
+}
+
+.profile-page-title {
+  margin: 0 0 4px 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.profile-page-subtitle {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--space-xl);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .profile-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.profile-card-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.card-rounded {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-card);
+}
+
+[data-theme='dark'] .card-rounded {
+  background: var(--bg-panel);
+}
+
+.profile-user-card {
+  text-align: center;
+  padding: var(--space-xl);
+}
+
+.profile-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0 auto 12px;
+}
+
+[data-theme='dark'] .profile-avatar {
+  color: #fff;
+}
+
+.profile-user-name {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.profile-user-position {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.profile-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--accent-green);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.profile-block-title {
+  margin: 0 0 12px 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.profile-contact-row,
+.profile-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.profile-contact-row:not(:last-child),
+.profile-activity-row:not(:last-child) {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.profile-contact-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.profile-activity-label {
+  color: var(--text-secondary);
+  min-width: 120px;
+}
+
+.profile-activity-value {
+  color: var(--text-primary);
+}
+
+.profile-status-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-green);
+  font-weight: 500;
+}
+
+.profile-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+}
+
+.profile-form-area {
+  padding: var(--space-xl);
+}
+
+.profile-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: var(--space-lg);
+}
+
+.profile-tab {
+  padding: 10px 16px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.profile-tab:hover {
+  color: var(--text-primary);
+}
+
+.profile-tab--active {
+  color: var(--accent-green);
+  border-bottom-color: var(--accent-green);
+}
+
+.profile-form-section-title {
+  margin: 0 0 4px 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.profile-form-section-desc {
+  margin: 0 0 var(--space-lg) 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.profile-save-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  margin-bottom: var(--space-lg);
+}
+
+.profile-save-message--success {
+  background: rgba(45, 90, 61, 0.12);
+  color: #166534;
+  border: 1px solid rgba(45, 90, 61, 0.3);
+}
+
+.profile-save-message--error {
+  background: rgba(185, 28, 28, 0.1);
+  color: var(--danger-red);
+  border: 1px solid rgba(185, 28, 28, 0.3);
+}
+
+.profile-save-message-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+[data-theme='dark'] .profile-save-message--success {
+  background: rgba(104, 173, 51, 0.2);
+  color: #86efac;
+  border-color: rgba(104, 173, 51, 0.4);
+}
+
+[data-theme='dark'] .profile-save-message--error {
+  background: rgba(211, 60, 60, 0.2);
+  color: #fca5a5;
+  border-color: rgba(211, 60, 60, 0.4);
+}
+
+.profile-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.profile-field--full {
+  grid-column: 1 / -1;
+}
+
+.profile-label {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.profile-label--with-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-info-icon {
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.profile-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  background: #fafafa;
+  color: var(--text-primary);
+}
+
+.profile-input:focus {
+  outline: none;
+  border-color: var(--accent-green);
+  background: #fff;
+}
+
+.profile-input[readonly] {
+  background: var(--chip-bg);
+  cursor: default;
+}
+
+[data-theme='dark'] .profile-input {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .profile-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--accent-green);
+}
+
+[data-theme='dark'] .profile-input[readonly] {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+[data-theme='dark'] .profile-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.profile-input-wrap {
+  position: relative;
+}
+
+.profile-input-wrap .profile-input {
+  padding-left: 40px;
+}
+
+.profile-input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.profile-input-wrap--readonly .profile-input-icon--lock {
+  color: var(--text-secondary);
+}
+
+.profile-select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}
+
+[data-theme='dark'] .profile-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+.profile-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+[data-theme='dark'] .profile-textarea {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .profile-textarea:focus {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.profile-field-hint {
+  margin: 6px 0 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.profile-form-actions {
+  margin-top: var(--space-md);
+}
+
+.profile-btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.profile-btn--primary {
+  background: var(--accent-green);
+  color: #fff;
+  border-color: var(--accent-green);
+}
+
+.profile-btn--primary:hover:not(:disabled) {
+  background: var(--accent-green-hover);
+  border-color: var(--accent-green-hover);
+}
+
+.profile-btn--secondary {
+  background: var(--bg-input, #f5f5f5);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.profile-btn--secondary:hover {
+  background: var(--border-color);
+}
+
+[data-theme='dark'] .profile-btn--primary {
+  color: #fff;
+}
+
+[data-theme='dark'] .profile-btn--secondary {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+.profile-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.profile-placeholder {
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.profile-password-section {
+  max-width: 480px;
+}
+
+.profile-password-heading {
+  margin: 0 0 var(--space-md) 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.profile-password-section .profile-save-message {
+  margin-bottom: var(--space-md);
+}
+
+[data-theme='dark'] .profile-page-title,
+[data-theme='dark'] .profile-form-section-title {
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .profile-page-subtitle,
+[data-theme='dark'] .profile-form-section-desc,
+[data-theme='dark'] .profile-field-hint {
+  color: var(--text-secondary);
+}
+
+[data-theme='dark'] .profile-input-icon {
+  color: var(--text-secondary);
+}
+
+/* Модальное окно подтверждения сохранения профиля */
+.profile-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: var(--modal-backdrop);
+}
+
+.profile-confirm-modal {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: var(--space-xl);
+  max-width: 400px;
+  width: 100%;
+  box-shadow: var(--shadow-card);
+}
+
+[data-theme='dark'] .profile-confirm-modal {
+  background: var(--bg-panel);
+}
+
+.profile-confirm-title {
+  margin: 0 0 var(--space-sm) 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.profile-confirm-text {
+  margin: 0 0 var(--space-lg) 0;
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+}
+
+.profile-confirm-actions {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+}
+</style>
