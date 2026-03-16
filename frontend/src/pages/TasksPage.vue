@@ -53,6 +53,7 @@ const selectedDate = ref(formatDateKey(today))
 
 const tasks = ref<CalendarTask[]>([])
 const tasksLoading = ref(false)
+const filesLoading = ref(false)
 const profiles = ref<ProfileRow[]>([])
 
 const isTaskModalOpen = ref(false)
@@ -68,6 +69,7 @@ const taskAssignees = ref<string[]>([])
 const taskFiles = ref<CalendarTaskFileRow[]>([])
 const fileUploading = ref(false)
 const assigneePickerOpen = ref(false)
+const assigneeSearch = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const taskFilesByTaskId = ref<Record<string, CalendarTaskFileRow[]>>({})
 
@@ -94,6 +96,15 @@ function assigneeInitials(p: ProfileRow): string {
 const profilesNotAssigned = computed(() =>
   profiles.value.filter((p) => !taskAssignees.value.includes(p.id)),
 )
+
+const assigneeSearchLower = computed(() => assigneeSearch.value.trim().toLowerCase())
+
+const assigneeOptions = computed(() => {
+  const q = assigneeSearchLower.value
+  const base = profilesNotAssigned.value
+  if (!q) return base
+  return base.filter((p) => profileLabel(p).toLowerCase().includes(q))
+})
 
 const monthsShort = [
   'Январь',
@@ -219,12 +230,19 @@ function getWeekRange(dateKey: string): { start: string; end: string } {
   }
 }
 
+const progressRangeStart = ref<string | null>(null)
+const progressRangeEnd = ref<string | null>(null)
+
 const weekProgress = computed(() => {
-  const { start, end } = getWeekRange(selectedDate.value)
-  const weekTasks = tasks.value.filter((t) => t.date >= start && t.date <= end)
-  const total = weekTasks.length
-  const completed = weekTasks.filter((t) => t.completedAt).length
-  return { total, completed, start, end }
+  const week = getWeekRange(selectedDate.value)
+  const start = progressRangeStart.value ?? week.start
+  const end = progressRangeEnd.value ?? progressRangeStart.value ?? week.end
+  const rangeStart = start <= end ? start : end
+  const rangeEnd = start <= end ? end : start
+  const rangeTasks = tasks.value.filter((t) => t.date >= rangeStart && t.date <= rangeEnd)
+  const total = rangeTasks.length
+  const completed = rangeTasks.filter((t) => t.completedAt).length
+  return { total, completed, start: rangeStart, end: rangeEnd }
 })
 
 const weekProgressLabel = computed(() => {
@@ -233,9 +251,85 @@ const weekProgressLabel = computed(() => {
   const d2 = new Date(end + 'T12:00:00')
   const day1 = d1.getDate()
   const day2 = d2.getDate()
-  const month = monthsShort[d2.getMonth()].slice(0, 3)
-  return `${day1} – ${day2} ${month}`
+  const m1 = monthsShort[d1.getMonth()].slice(0, 3)
+  const m2 = monthsShort[d2.getMonth()].slice(0, 3)
+  if (start === end) return `${day1} ${m1}`
+  if (m1 === m2) return `${day1} – ${day2} ${m2}`
+  return `${day1} ${m1} – ${day2} ${m2}`
 })
+
+const progressBlockActive = ref(false)
+const showProgressHint = ref(false)
+let progressHintTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Диапазон текущего отображаемого месяца (с 1-го по последнее число) для подсветки при выборе прогресса */
+const progressMonthRange = computed(() => {
+  const y = currentYear.value
+  const m = currentMonth.value
+  const start = `${y}-${String(m + 1).padStart(2, '0')}-01`
+  const lastDay = new Date(y, m + 1, 0).getDate()
+  const end = `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  return { start, end }
+})
+
+const isCustomProgressRange = computed(
+  () => progressRangeStart.value !== null || progressRangeEnd.value !== null,
+)
+
+function onProgressBlockClick() {
+  progressBlockActive.value = !progressBlockActive.value
+  if (progressBlockActive.value) {
+    showProgressHint.value = true
+    if (progressHintTimer) clearTimeout(progressHintTimer)
+    progressHintTimer = setTimeout(() => {
+      showProgressHint.value = false
+      progressHintTimer = null
+    }, 4500)
+  }
+}
+
+function clearProgressRange() {
+  progressRangeStart.value = null
+  progressRangeEnd.value = null
+}
+
+function selectDayForProgress(key: string) {
+  if (!progressRangeStart.value) {
+    progressRangeStart.value = key
+    progressRangeEnd.value = null
+  } else if (!progressRangeEnd.value) {
+    const a = progressRangeStart.value
+    const b = key
+    progressRangeStart.value = a <= b ? a : b
+    progressRangeEnd.value = a <= b ? b : a
+  } else {
+    progressRangeStart.value = key
+    progressRangeEnd.value = null
+  }
+}
+
+function selectDay(key: string) {
+  if (progressBlockActive.value) {
+    selectDayForProgress(key)
+  }
+  selectedDate.value = key
+}
+
+/** Подсветка в календаре: при активном фрейме — весь месяц, иначе — текущий диапазон прогресса */
+function isDayInProgressRange(dayKey: string): boolean {
+  if (progressBlockActive.value) {
+    const { start, end } = progressMonthRange.value
+    return dayKey >= start && dayKey <= end
+  }
+  const { start, end } = weekProgress.value
+  return dayKey >= start && dayKey <= end
+}
+
+/** Первая дата для пульсации: при активном фрейме — всегда 1-е число месяца */
+function isProgressRangeStartDay(dayKey: string): boolean {
+  if (!progressBlockActive.value) return false
+  return dayKey === progressMonthRange.value.start
+}
 
 async function loadFilesForVisibleTasks() {
   const ids = tasksForSelectedDate.value.map((t) => t.id)
@@ -243,18 +337,23 @@ async function loadFilesForVisibleTasks() {
     taskFilesByTaskId.value = {}
     return
   }
+  filesLoading.value = true
   const next: Record<string, CalendarTaskFileRow[]> = {}
-  await Promise.all(
-    ids.map(async (taskId) => {
-      try {
-        const files = await loadTaskFiles(taskId)
-        next[taskId] = files
-      } catch {
-        next[taskId] = []
-      }
-    }),
-  )
-  taskFilesByTaskId.value = next
+  try {
+    await Promise.all(
+      ids.map(async (taskId) => {
+        try {
+          const files = await loadTaskFiles(taskId)
+          next[taskId] = files
+        } catch {
+          next[taskId] = []
+        }
+      }),
+    )
+    taskFilesByTaskId.value = next
+  } finally {
+    filesLoading.value = false
+  }
 }
 
 function getTaskFiles(taskId: string): CalendarTaskFileRow[] {
@@ -277,10 +376,6 @@ function nextMonth() {
   } else {
     currentMonth.value += 1
   }
-}
-
-function selectDay(key: string) {
-  selectedDate.value = key
 }
 
 async function loadTasksFromDb() {
@@ -534,6 +629,8 @@ async function deleteTaskAndCloseModal() {
               'calendar-day--muted': !day.inCurrentMonth,
               'calendar-day--today': day.isToday,
               'calendar-day--selected': day.isSelected,
+              'calendar-day--in-range': progressBlockActive && isDayInProgressRange(day.key),
+              'calendar-day--range-start': isProgressRangeStartDay(day.key),
             }"
             @click="selectDay(day.key)"
           >
@@ -542,8 +639,29 @@ async function deleteTaskAndCloseModal() {
           </button>
         </div>
 
-        <div class="week-progress">
-          <h3 class="week-progress-title">Прогресс за неделю</h3>
+        <div
+          class="week-progress"
+          :class="{ 'week-progress--active': progressBlockActive }"
+          role="button"
+          tabindex="0"
+          @click="onProgressBlockClick"
+          @keydown.enter="onProgressBlockClick"
+          @keydown.space.prevent="onProgressBlockClick"
+        >
+          <div v-if="showProgressHint" class="week-progress-hint">
+            Выберите диапазон дат для подсчёта прогресса
+          </div>
+          <div class="week-progress-head">
+            <h3 class="week-progress-title">Прогресс</h3>
+            <button
+              v-if="isCustomProgressRange"
+              type="button"
+              class="week-progress-reset"
+              @click.stop="clearProgressRange()"
+            >
+              Сбросить
+            </button>
+          </div>
           <p class="week-progress-range">{{ weekProgressLabel }}</p>
           <p class="week-progress-count">
             <span class="week-progress-number">{{ weekProgress.completed }}</span>
@@ -579,11 +697,21 @@ async function deleteTaskAndCloseModal() {
               Запланировано {{ tasksForSelectedDate.length }} {{ tasksForSelectedDate.length === 1 ? 'задача' : tasksForSelectedDate.length < 5 ? 'задачи' : 'задач' }}
               ({{ tasksForSelectedDate.filter(t => t.completedAt).length }} выполнено)
             </p>
+            <p v-if="filesLoading" class="day-header-loading">
+              <span class="day-header-loading-dots"><span /><span /><span /></span>
+              Загрузка вложений…
+            </p>
           </div>
         </header>
 
-        <div v-if="tasksLoading" class="day-empty">
-          <p>Загрузка…</p>
+        <div v-if="tasksLoading" class="day-loading">
+          <div class="day-loading-spinner" aria-hidden="true" />
+          <p class="day-loading-text">Загрузка задач…</p>
+          <div class="day-loading-skeletons">
+            <div class="day-loading-skeleton" />
+            <div class="day-loading-skeleton day-loading-skeleton--short" />
+            <div class="day-loading-skeleton day-loading-skeleton--medium" />
+          </div>
         </div>
         <div v-else-if="!tasksForSelectedDate.length" class="day-empty">
           <p>На этот день ещё нет задач. Нажмите «Добавить задачу» в шапке страницы.</p>
@@ -700,236 +828,240 @@ async function deleteTaskAndCloseModal() {
       @click="closeTaskModal"
     >
       <div class="modal modal-calendar" @click.stop>
-        <div class="modal-header modal-header--task">
+        <!-- Шапка по макету: px-8 py-6, border-b, иконка 40x40 rounded-xl bg-green-50 -->
+        <div class="modal-header modal-header--design">
           <div class="modal-header-main">
-            <div class="modal-icon modal-icon--edit">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
+            <div class="modal-icon modal-icon--design">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                 <path d="m15 5 4 4" />
               </svg>
             </div>
             <div class="modal-header-text">
-              <h2 class="modal-title">
+              <h2 class="modal-title modal-title--design">
                 {{ editingTaskId ? 'Редактирование задачи' : 'Новая задача' }}
               </h2>
-              <p v-if="editingTaskId" class="modal-task-id">ID: {{ shortTaskId(editingTaskId) }}</p>
+              <p v-if="editingTaskId" class="modal-task-id modal-task-id--design">ID: {{ shortTaskId(editingTaskId) }}</p>
               <p v-else class="modal-subtitle">
-                {{
-                  new Date((taskDate || selectedDate) + 'T12:00:00').toLocaleDateString('ru-RU', {
-                    day: 'numeric',
-                    month: 'long',
-                    weekday: 'long',
-                  })
-                }}
+                {{ new Date((taskDate || selectedDate) + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' }) }}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            class="modal-close"
-            aria-label="Закрыть"
-            @click="closeTaskModal"
-          >
-            ×
+          <button type="button" class="modal-close modal-close--design" aria-label="Закрыть" @click="closeTaskModal">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" x2="6" y1="6" y2="18" />
+              <line x1="6" x2="18" y1="6" y2="18" />
+            </svg>
           </button>
         </div>
 
-        <form class="modal-form" @submit.prevent="onSubmitTask">
-          <label class="modal-field">
-            <span class="modal-label">Название задачи</span>
-            <input
-              v-model="taskTitle"
-              type="text"
-              class="modal-input"
-              placeholder="Введите название..."
-              required
-            />
-          </label>
-
-          <label class="modal-field">
-            <span class="modal-label">Описание</span>
-            <textarea
-              v-model="taskDescription"
-              class="modal-textarea"
-              rows="4"
-              placeholder="Добавьте детали задачи..."
-            />
-          </label>
-
-          <label class="modal-field">
-            <span class="modal-label">Срок выполнения</span>
-            <div class="modal-deadline-row">
+        <form class="modal-form modal-form--design" @submit.prevent="onSubmitTask">
+          <div class="modal-body">
+            <label class="modal-field modal-field--design">
+              <span class="modal-label modal-label--design">Название задачи</span>
               <input
-                v-model="taskDate"
-                type="date"
-                class="modal-input modal-input--date"
+                v-model="taskTitle"
+                type="text"
+                class="modal-input modal-input--design modal-input--title"
+                placeholder="Введите название..."
+                required
               />
-              <span class="modal-deadline-time">
-                <input
-                  v-model="taskStartTime"
-                  type="time"
-                  class="modal-input modal-input--time"
-                />
-                <span class="time-separator">–</span>
-                <input
-                  v-model="taskEndTime"
-                  type="time"
-                  class="modal-input modal-input--time"
-                />
-              </span>
+            </label>
+
+            <label class="modal-field modal-field--design">
+              <span class="modal-label modal-label--design">Описание</span>
+              <textarea
+                v-model="taskDescription"
+                class="modal-textarea modal-textarea--design"
+                rows="4"
+                placeholder="Добавьте детали задачи..."
+              />
+            </label>
+
+            <!-- Сетка как в макете: Срок выполнения | Приоритет -->
+            <div class="modal-grid-2">
+              <label class="modal-field modal-field--design">
+                <span class="modal-label modal-label--design">Срок выполнения</span>
+                <div class="modal-deadline-row modal-deadline-row--design">
+                  <div class="modal-deadline-date">
+                    <svg class="modal-input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect width="18" height="18" x="3" y="4" rx="2" />
+                      <line x1="16" x2="16" y1="2" y2="6" />
+                      <line x1="8" x2="8" y1="2" y2="6" />
+                      <line x1="3" x2="21" y1="10" y2="10" />
+                    </svg>
+                    <input v-model="taskDate" type="date" class="modal-input modal-input--design modal-input--with-icon" />
+                  </div>
+                  <div class="modal-deadline-time-range">
+                    <div class="modal-deadline-time-start">
+                      <svg class="modal-input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l3 3" />
+                      </svg>
+                      <input v-model="taskStartTime" type="time" class="modal-input modal-input--design modal-input--with-icon" />
+                    </div>
+                    <span class="time-separator">–</span>
+                    <input v-model="taskEndTime" type="time" class="modal-input modal-input--design modal-input--time-end" />
+                  </div>
+                </div>
+              </label>
+              <label class="modal-field modal-field--design">
+                <span class="modal-label modal-label--design">Приоритет</span>
+                <select v-model="taskPriority" class="modal-input modal-input--design modal-select modal-select--design">
+                  <option value="normal">Обычный</option>
+                  <option value="high">Высокий</option>
+                  <option value="low">Низкий</option>
+                </select>
+              </label>
             </div>
-          </label>
 
-          <label class="modal-field">
-            <span class="modal-label">Приоритет</span>
-            <select v-model="taskPriority" class="modal-input modal-select">
-              <option value="normal">Обычный</option>
-              <option value="high">Высокий</option>
-              <option value="low">Низкий</option>
-            </select>
-          </label>
-
-          <div class="modal-field">
-            <div class="modal-label-row">
-              <span class="modal-label">Ответственные специалисты</span>
-              <div class="modal-assignee-picker">
-                <button
-                  type="button"
-                  class="modal-add-assignee-btn"
-                  @click="assigneePickerOpen = !assigneePickerOpen"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" x2="12" y1="8" y2="16" />
-                    <line x1="8" x2="16" y1="12" y2="12" />
-                  </svg>
-                  Добавить
-                </button>
-                <div v-if="assigneePickerOpen" class="modal-assignee-dropdown">
+            <!-- Ответственные: label + кнопка «Добавить» в одну строку, чипы как в макете -->
+            <div class="modal-field modal-field--design">
+              <div class="modal-label-row modal-label-row--design">
+                <span class="modal-label modal-label--design">Ответственные специалисты</span>
+                <div class="modal-assignee-picker">
                   <button
-                    v-for="p in profilesNotAssigned"
-                    :key="p.id"
                     type="button"
-                    class="modal-assignee-option"
-                    @click="addAssignee(p.id)"
+                    class="modal-add-assignee-btn modal-add-assignee-btn--design"
+                    @click="assigneePickerOpen = !assigneePickerOpen"
                   >
-                    {{ profileLabel(p) }}{{ p.id === auth.user?.id ? ' (Вы)' : '' }}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" x2="12" y1="8" y2="16" />
+                      <line x1="8" x2="16" y1="12" y2="12" />
+                    </svg>
+                    Добавить
                   </button>
-                  <p v-if="profilesNotAssigned.length === 0" class="modal-assignee-empty">Все добавлены</p>
+                  <div v-if="assigneePickerOpen" class="modal-assignee-dropdown">
+                    <div class="modal-assignee-search">
+                      <svg
+                        class="modal-assignee-search-icon"
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <circle cx="11" cy="11" r="7" />
+                        <line x1="16.65" y1="16.65" x2="21" y2="21" />
+                      </svg>
+                      <input
+                        v-model="assigneeSearch"
+                        type="text"
+                        class="modal-assignee-search-input"
+                        placeholder="Поиск по имени или email"
+                      />
+                    </div>
+                    <button
+                      v-for="p in assigneeOptions"
+                      :key="p.id"
+                      type="button"
+                      class="modal-assignee-option"
+                      @click="addAssignee(p.id)"
+                    >
+                      {{ profileLabel(p) }}{{ p.id === auth.user?.id ? ' (Вы)' : '' }}
+                    </button>
+                    <p
+                      v-if="assigneeOptions.length === 0"
+                      class="modal-assignee-empty"
+                    >
+                      {{ profilesNotAssigned.length === 0 ? 'Все добавлены' : 'Ничего не найдено' }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div class="modal-chips modal-chips--design">
+                <div
+                  v-for="uid in taskAssignees"
+                  :key="uid"
+                  class="modal-chip modal-chip--design"
+                >
+                  <span class="modal-chip-avatar modal-chip-avatar--design">{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
+                  <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
+                  <button type="button" class="modal-chip-remove" aria-label="Убрать" @click="removeAssignee(uid)">×</button>
                 </div>
               </div>
             </div>
-            <div class="modal-chips">
-              <div
-                v-for="uid in taskAssignees"
-                :key="uid"
-                class="modal-chip"
-              >
-                <span class="modal-chip-avatar">{{ profileById(uid) ? assigneeInitials(profileById(uid)!) : '?' }}</span>
-                <span class="modal-chip-label">{{ profileById(uid) ? profileLabel(profileById(uid)!) : uid }}</span>
-                <button
-                  type="button"
-                  class="modal-chip-remove"
-                  aria-label="Убрать"
-                  @click="removeAssignee(uid)"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-          </div>
 
-          <div class="modal-field">
-            <span class="modal-label">Прикреплённые файлы</span>
-            <div class="modal-files-grid">
-              <a
-                v-for="f in taskFiles"
-                :key="f.id"
-                :href="getTaskFilePublicUrl(f.file_path)"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="modal-file-card"
-              >
-                <span class="modal-file-icon">📄</span>
-                <div class="modal-file-info">
-                  <span class="modal-file-name">{{ f.file_name }}</span>
-                  <span class="modal-file-size">{{ formatFileSize(f.file_size) }}</span>
-                </div>
-                <button
-                  type="button"
-                  class="modal-file-delete"
-                  aria-label="Удалить файл"
-                  @click.prevent="removeFile(f)"
+            <!-- Прикреплённые файлы: карточки как в макете (иконка в квадрате, имя, размер, корзина) -->
+            <div class="modal-field modal-field--design">
+              <span class="modal-label modal-label--design">Прикреплённые файлы</span>
+              <div class="modal-files-grid modal-files-grid--design">
+                <a
+                  v-for="f in taskFiles"
+                  :key="f.id"
+                  :href="getTaskFilePublicUrl(f.file_path)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="modal-file-card modal-file-card--design"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    <line x1="10" x2="10" y1="11" y2="17" />
-                    <line x1="14" x2="14" y1="11" y2="17" />
+                  <div class="modal-file-icon-box">
+                    <svg v-if="/\.pdf$/i.test(f.file_name)" class="modal-file-icon-pdf" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <path d="M14 2v6h6" />
+                      <path d="M9 13h6" />
+                      <path d="M9 17h6" />
+                    </svg>
+                    <svg v-else class="modal-file-icon-doc" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <path d="M14 2v6h6" />
+                    </svg>
+                  </div>
+                  <div class="modal-file-info">
+                    <span class="modal-file-name">{{ f.file_name }}</span>
+                    <span class="modal-file-size">{{ formatFileSize(f.file_size) }}</span>
+                  </div>
+                  <button type="button" class="modal-file-delete" aria-label="Удалить файл" @click.prevent="removeFile(f)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                      <line x1="10" x2="10" y1="11" y2="17" />
+                      <line x1="14" x2="14" y1="11" y2="17" />
+                    </svg>
+                  </button>
+                </a>
+                <button
+                  v-if="editingTaskId"
+                  type="button"
+                  class="modal-attach-placeholder modal-attach-placeholder--design"
+                  :disabled="fileUploading"
+                  @click="triggerFileInput"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                   </svg>
+                  <span>{{ fileUploading ? 'Загрузка...' : 'Прикрепить файл' }}</span>
                 </button>
-              </a>
-              <button
-                v-if="editingTaskId"
-                type="button"
-                class="modal-attach-placeholder"
-                :disabled="fileUploading"
-                @click="triggerFileInput"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-                <span>{{ fileUploading ? 'Загрузка...' : 'Прикрепить файл' }}</span>
-              </button>
-              <div v-else class="modal-attach-placeholder modal-attach-placeholder--muted">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-                <span>Сохраните задачу, чтобы прикрепить файлы</span>
+                <div v-else class="modal-attach-placeholder modal-attach-placeholder--design modal-attach-placeholder--muted">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                  <span>Сохраните задачу, чтобы прикрепить файлы</span>
+                </div>
               </div>
             </div>
-            <input
-              ref="fileInputRef"
-              type="file"
-              class="modal-file-input-hidden"
-              accept="image/*,.pdf,.doc,.docx"
-              @change="onFileSelect"
-            />
           </div>
 
-          <div class="modal-actions modal-actions--task">
-            <button
-              v-if="editingTaskId"
-              type="button"
-              class="modal-btn-danger"
-              @click="deleteTaskAndCloseModal"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <!-- Подвал по макету: bg-gray-50, border-t, Удалить слева, Отмена + Сохранить справа -->
+          <div class="modal-actions modal-actions--design">
+            <button v-if="editingTaskId" type="button" class="modal-btn-danger modal-btn-danger--design" @click="deleteTaskAndCloseModal">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                 <line x1="10" x2="10" y1="11" y2="17" />
                 <line x1="14" x2="14" y1="11" y2="17" />
               </svg>
               Удалить задачу
             </button>
-            <button
-              type="button"
-              class="modal-btn-ghost"
-              @click="closeTaskModal"
-            >
-              Отмена
-            </button>
-            <button type="submit" class="modal-btn">
-              {{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}
-            </button>
+            <div class="modal-actions-right">
+              <button type="button" class="modal-btn-ghost modal-btn-ghost--design" @click="closeTaskModal">Отмена</button>
+              <button type="submit" class="modal-btn modal-btn--design">
+                {{ editingTaskId ? 'Сохранить изменения' : 'Создать задачу' }}
+              </button>
+            </div>
           </div>
         </form>
+        <input ref="fileInputRef" type="file" class="modal-file-input-hidden" accept="image/*,.pdf,.doc,.docx" @change="onFileSelect" />
       </div>
     </div>
   </section>
@@ -988,6 +1120,363 @@ async function deleteTaskAndCloseModal() {
 @media (max-width: 900px) {
   .calendar-layout {
     grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+/* Планшет: компактнее отступы и календарь */
+@media (max-width: 768px) {
+  .calendar-page {
+    gap: var(--space-lg);
+  }
+
+  .calendar-card {
+    padding: var(--space-md) var(--space-lg);
+  }
+
+  .calendar-grid {
+    gap: 3px;
+  }
+
+  .calendar-day {
+    padding: 5px 0;
+  }
+
+  .calendar-day-number {
+    font-size: 0.85rem;
+  }
+
+  .week-progress {
+    margin-top: var(--space-md);
+    padding: var(--space-md) var(--space-lg);
+  }
+
+  .day-title {
+    font-size: 1.15rem;
+  }
+
+  .day-task {
+    padding: 12px 14px;
+  }
+}
+
+/* Большой телефон / маленький планшет */
+@media (max-width: 600px) {
+  .calendar-page {
+    gap: var(--space-md);
+  }
+
+  .calendar-header {
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+  }
+
+  .calendar-add-btn {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+  }
+
+  .calendar-add-btn-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .calendar-card {
+    padding: var(--space-md);
+  }
+
+  .calendar-month-header {
+    margin-bottom: var(--space-sm);
+  }
+
+  .month-label {
+    font-size: 0.95rem;
+  }
+
+  .month-nav-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 1rem;
+  }
+
+  .calendar-grid {
+    gap: 2px;
+  }
+
+  .calendar-weekday {
+    font-size: 0.7rem;
+    padding-bottom: 2px;
+  }
+
+  .calendar-day {
+    padding: 4px 0;
+    min-height: 36px;
+  }
+
+  .calendar-day-number {
+    font-size: 0.8rem;
+  }
+
+  .calendar-day-dot {
+    width: 4px;
+    height: 4px;
+  }
+
+  .week-progress {
+    padding: var(--space-sm) var(--space-md);
+    margin-top: var(--space-md);
+  }
+
+  .week-progress-hint {
+    left: 0;
+    right: 0;
+    max-width: none;
+    white-space: normal;
+    text-align: center;
+    padding: 10px 12px;
+    font-size: 0.75rem;
+  }
+
+  .week-progress-hint::after {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+
+  .week-progress-title {
+    font-size: 0.9rem;
+  }
+
+  .week-progress-count {
+    font-size: 1rem;
+    margin-bottom: 8px;
+  }
+
+  .week-progress-number {
+    font-size: 1.35rem;
+  }
+
+  .week-progress-labels {
+    font-size: 0.7rem;
+  }
+
+  .calendar-card-right {
+    min-height: 0;
+  }
+
+  .day-header {
+    margin-bottom: var(--space-sm);
+  }
+
+  .day-title {
+    font-size: 1.1rem;
+  }
+
+  .day-header-summary {
+    font-size: 0.8rem;
+  }
+
+  .day-task-list {
+    gap: 10px;
+  }
+
+  .day-task {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .day-task-title {
+    font-size: 0.9rem;
+  }
+
+  .day-task-desc,
+  .day-task-time {
+    font-size: 0.8rem;
+  }
+
+  .day-loading-skeleton {
+    height: 60px;
+  }
+
+  .day-loading-skeleton--short {
+    height: 48px;
+  }
+
+  .day-loading-skeleton--medium {
+    height: 52px;
+  }
+}
+
+/* Мобильный: максимально компактно */
+@media (max-width: 480px) {
+  .calendar-page {
+    gap: var(--space-sm);
+  }
+
+  .calendar-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .calendar-add-btn {
+    width: 100%;
+    justify-content: center;
+    padding: 10px 16px;
+  }
+
+  .calendar-card {
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .calendar-month-header {
+    margin-bottom: 10px;
+  }
+
+  .month-label {
+    font-size: 0.9rem;
+  }
+
+  .month-nav-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .calendar-day {
+    min-height: 38px;
+  }
+
+  .calendar-day-number {
+    font-size: 0.75rem;
+  }
+
+  .week-progress {
+    padding: 10px 12px;
+  }
+
+  .week-progress-head {
+    margin-bottom: 2px;
+  }
+
+  .week-progress-title {
+    font-size: 0.85rem;
+  }
+
+  .week-progress-range {
+    font-size: 0.75rem;
+    margin-bottom: 6px;
+  }
+
+  .week-progress-count {
+    font-size: 0.95rem;
+    margin-bottom: 6px;
+  }
+
+  .week-progress-number {
+    font-size: 1.2rem;
+  }
+
+  .week-progress-bar-wrap {
+    height: 6px;
+    margin-bottom: 6px;
+  }
+
+  .week-progress-reset {
+    padding: 3px 8px;
+    font-size: 0.7rem;
+  }
+
+  .day-header {
+    padding: 0;
+  }
+
+  .day-title {
+    font-size: 1rem;
+  }
+
+  .day-header-summary {
+    font-size: 0.75rem;
+  }
+
+  .day-empty {
+    padding: var(--space-md);
+    font-size: 0.9rem;
+  }
+
+  .day-empty-btn {
+    margin-top: var(--space-sm);
+    padding: 8px 14px;
+    font-size: 0.8rem;
+  }
+
+  .day-task {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .day-task-checkbox {
+    width: 22px;
+    height: 22px;
+  }
+
+  .day-task-checkbox-empty {
+    width: 20px;
+    height: 20px;
+  }
+
+  .day-task-title {
+    font-size: 0.85rem;
+  }
+
+  .day-task-desc,
+  .day-task-time,
+  .day-task-meta {
+    font-size: 0.75rem;
+  }
+
+  .priority-pill,
+  .assignee-pill {
+    font-size: 0.7rem;
+    padding: 3px 6px;
+  }
+
+  .modal-backdrop {
+    padding: var(--space-sm);
+    align-items: flex-end;
+  }
+
+  .modal-backdrop .modal {
+    max-height: 85vh;
+    border-radius: 20px 20px 0 0;
+  }
+
+  .modal-header {
+    padding: 16px 20px;
+  }
+
+  .modal-title {
+    font-size: 1.1rem;
+  }
+
+  .modal-actions {
+    padding: 16px 20px;
+    gap: 10px;
+  }
+
+  .modal-actions--task {
+    flex-direction: column;
+  }
+
+  .modal-actions--task .modal-btn-danger {
+    order: 1;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .modal-actions--task .modal-btn-ghost,
+  .modal-actions--task .modal-btn {
+    order: 2;
+    width: 100%;
+    justify-content: center;
   }
 }
 
@@ -1071,17 +1560,128 @@ async function deleteTaskAndCloseModal() {
 }
 
 .week-progress {
+  position: relative;
   margin-top: var(--space-lg);
   padding: var(--space-md) var(--space-lg);
   background: var(--agro);
   color: #fff;
   border-radius: 16px;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  border: 2px solid transparent;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.week-progress:hover {
+  filter: brightness(1.05);
+}
+
+.week-progress--active {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.4), 0 4px 20px rgba(61, 92, 64, 0.4);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.week-progress-hint {
+  position: absolute;
+  top: -8px;
+  right: 0;
+  transform: translateY(-100%);
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+  animation: week-progress-hint-in 0.25s ease;
+  z-index: 5;
+}
+
+.week-progress-hint::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  right: 16px;
+  border: 6px solid transparent;
+  border-top-color: var(--bg-panel);
+  border-bottom: none;
+}
+
+@keyframes week-progress-hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(-90%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-100%);
+  }
+}
+
+.calendar-day--in-range {
+  box-shadow: 0 0 0 2px var(--agro);
+  background: rgba(61, 92, 64, 0.2) !important;
+}
+
+.calendar-day--in-range.calendar-day--muted .calendar-day-number {
+  color: var(--agro);
+  opacity: 1;
+}
+
+.calendar-day--in-range.calendar-day--selected {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--agro);
+}
+
+.calendar-day--range-start {
+  animation: calendar-day-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes calendar-day-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--agro);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--agro), 0 0 0 6px rgba(61, 92, 64, 0.35);
+  }
+}
+
+.week-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  min-width: 0;
 }
 
 .week-progress-title {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 0.95rem;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.week-progress-reset {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.week-progress-reset:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.6);
 }
 
 .week-progress-range {
@@ -1206,6 +1806,118 @@ async function deleteTaskAndCloseModal() {
   padding: 8px 14px;
   font-size: 0.85rem;
   cursor: pointer;
+}
+
+.day-loading {
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.day-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--agro);
+  border-radius: 50%;
+  animation: day-loading-spin 0.8s linear infinite;
+}
+
+@keyframes day-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.day-loading-text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.day-loading-skeletons {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.day-loading-skeleton {
+  height: 72px;
+  border-radius: 12px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-base) 0%,
+    var(--bg-panel) 50%,
+    var(--bg-base) 100%
+  );
+  background-size: 200% 100%;
+  animation: day-loading-shimmer 1.2s ease-in-out infinite;
+}
+
+.day-loading-skeleton--short {
+  height: 56px;
+  width: 75%;
+}
+
+.day-loading-skeleton--medium {
+  height: 64px;
+  width: 90%;
+}
+
+@keyframes day-loading-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.day-header-loading {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.day-header-loading-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.day-header-loading-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--agro);
+  animation: day-loading-dot 0.6s ease-in-out infinite both;
+}
+
+.day-header-loading-dots span:nth-child(2) {
+  animation-delay: 0.1s;
+}
+
+.day-header-loading-dots span:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
+@keyframes day-loading-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .day-empty {
@@ -1476,13 +2188,451 @@ async function deleteTaskAndCloseModal() {
   color: var(--text-primary);
 }
 
+/* Макет: шапка */
+.modal-header--design {
+  padding: 24px 32px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.modal-icon--design {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(61, 92, 64, 0.08);
+  color: var(--agro);
+}
+
+.modal-title--design {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.modal-task-id--design {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.modal-close--design {
+  color: var(--text-secondary);
+}
+
+.modal-close--design:hover {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* Макет: поля */
+.modal-field--design {
+  gap: 8px;
+}
+
+.modal-label--design {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.modal-input--title {
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+.modal-input--design,
+.modal-textarea--design {
+  padding: 12px 16px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  font-size: 0.875rem;
+}
+
+.modal-textarea--design {
+  resize: vertical;
+  min-height: 96px;
+  line-height: 1.5;
+}
+
+.modal-grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.modal-grid-2 .modal-field--design {
+  min-width: 0;
+}
+
+/* Поле приоритета — такое же оформление, как у полей «Срок выполнения» */
+.modal-grid-2 .modal-field--design .modal-select--design {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  min-height: 42px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 40px;
+}
+
+@media (max-width: 560px) {
+  .modal-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Срок выполнения — как в макете: flex gap-2, дата flex-1, время w-32, pl-10 py-2.5 rounded-xl */
+.modal-deadline-row--design {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modal-deadline-date {
+  position: relative;
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+
+.modal-deadline-date .modal-input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.modal-deadline-date .modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 16px 10px 40px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Блок времени: как в макете w-32 (8rem) на каждое поле, pl-10 pr-4 py-2.5 */
+.modal-deadline-time-range {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.modal-deadline-time-start {
+  position: relative;
+  width: 8rem;
+  flex-shrink: 0;
+}
+
+.modal-deadline-time-start .modal-input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.modal-deadline-time-start .modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 16px 10px 40px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.modal-deadline-time-range .time-separator {
+  flex-shrink: 0;
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.modal-deadline-time-range .modal-input--time-end {
+  width: 8rem;
+  flex-shrink: 0;
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-sizing: border-box;
+}
+
+.modal-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-input-wrap--time {
+  width: 8rem;
+  min-width: 7rem;
+  flex: 0 0 8rem;
+}
+
+.modal-input-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.modal-input--with-icon {
+  padding-left: 42px;
+  min-width: 0;
+}
+
+.modal-deadline-row--design .time-separator {
+  flex-shrink: 0;
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.modal-input--time-end {
+  width: 6rem;
+  min-width: 5rem;
+  flex: 0 0 6rem;
+}
+
+.modal-label-row--design {
+  margin-bottom: 0;
+}
+
+/* Подпись и кнопка «Добавить» не накладываются: подпись сжимается, кнопка не переносится под чипы */
+.modal-field--design .modal-label-row--design {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.modal-field--design .modal-label-row--design .modal-label {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.modal-field--design .modal-label-row--design .modal-assignee-picker {
+  flex-shrink: 0;
+}
+
+.modal-chips--design {
+  margin-top: 0;
+}
+
+.modal-add-assignee-btn--design {
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* Чипы как в макете: rounded-full, тень, белый фон; отступ сверху чтобы не налезать на строку с «Добавить» */
+.modal-chips.modal-chips--design {
+  gap: 8px;
+}
+
+.modal-chip--design {
+  padding: 6px 12px 6px 6px;
+  border-radius: 9999px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.modal-chip-avatar--design {
+  width: 24px;
+  height: 24px;
+  font-size: 0.6rem;
+}
+
+/* Файлы: карточка с иконкой в квадрате */
+.modal-files-grid--design {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.modal-file-card--design {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.modal-file-card--design:hover {
+  border-color: var(--agro);
+}
+
+.modal-file-icon-box {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.modal-file-icon-pdf {
+  color: #dc2626;
+}
+
+.modal-file-icon-doc {
+  color: var(--text-secondary);
+}
+
+.modal-file-card--design .modal-file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-file-card--design .modal-file-name {
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-file-card--design .modal-file-size {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+}
+
+.modal-file-card--design .modal-file-delete {
+  color: var(--text-secondary);
+  padding: 4px;
+}
+
+.modal-file-card--design .modal-file-delete:hover {
+  color: #dc2626;
+}
+
+.modal-attach-placeholder--design {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 64px;
+}
+
+.modal-attach-placeholder--design:hover:not(:disabled) {
+  background: rgba(61, 92, 64, 0.05);
+  border-color: var(--agro);
+  color: var(--agro);
+}
+
+
+/* Подвал по макету: серый фон */
+.modal-actions--design {
+  padding: 24px 32px;
+  background: var(--bg-base);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.modal-btn-danger--design {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #dc2626;
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.modal-btn-danger--design:hover {
+  color: #b91c1c;
+}
+
+.modal-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.modal-btn-ghost--design {
+  padding: 10px 24px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+}
+
+.modal-btn-ghost--design:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-primary);
+}
+
+.modal-btn--design {
+  padding: 10px 32px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 0.875rem;
+  box-shadow: 0 2px 8px rgba(61, 92, 64, 0.35);
+}
+
+.modal-btn--design:hover {
+  box-shadow: 0 4px 12px rgba(61, 92, 64, 0.4);
+}
+
 .modal-form {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.modal-form--design {
+  padding: 0;
+  gap: 0;
+}
+
+.modal-body {
+  flex: 1;
   overflow-y: auto;
+  padding: 32px;
   display: flex;
   flex-direction: column;
   gap: 24px;
-  padding: 32px;
 }
 
 .modal-field {
@@ -1537,9 +2687,38 @@ async function deleteTaskAndCloseModal() {
   border-radius: 8px;
   box-shadow: var(--shadow-card);
   z-index: 10;
-  padding: 4px;
+  padding: 6px;
   max-height: 200px;
   overflow-y: auto;
+}
+
+.modal-assignee-search {
+  position: relative;
+  margin-bottom: 4px;
+}
+
+.modal-assignee-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+}
+
+.modal-assignee-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px 6px 30px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+  font-size: 0.8rem;
+}
+
+.modal-assignee-search-input:focus {
+  outline: none;
+  border-color: var(--agro);
+  box-shadow: 0 0 0 2px rgba(61, 92, 64, 0.12);
 }
 
 .modal-assignee-option {
