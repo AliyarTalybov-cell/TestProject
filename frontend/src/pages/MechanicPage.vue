@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import type { ActiveDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { appendEvent, loadActive, saveActive } from '@/lib/downtimeStorage'
 import {
@@ -9,6 +10,7 @@ import {
 } from '@/lib/operationStorage'
 import { loadDowntimeReasons, loadWorkOperations, isSupabaseConfigured } from '@/lib/reasonsAndOperations'
 import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperations'
+import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
 import { useAuth } from '@/stores/auth'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
@@ -20,6 +22,7 @@ const DEFAULT_REASONS: Array<{ label: string; description: string; category: Dow
   { label: 'Ожидание задания', description: 'Нет подтверждённого задания от агронома', category: 'waiting' },
 ]
 
+const router = useRouter()
 const auth = useAuth()
 const employeeDisplayName = computed(() => {
   const u = auth.user.value
@@ -65,19 +68,18 @@ const isReasonsOpen = ref(false)
 const isOperationsOpen = ref(false)
 const isStartedModalOpen = ref(false)
 const isFinishedModalOpen = ref(false)
+const isFinishedModalType = ref<'downtime' | 'operation'>('downtime')
 const isAddFieldOpen = ref(false)
+
+const finishNotesModalOpen = ref(false)
+const finishNotesType = ref<'downtime' | 'operation' | null>(null)
+const finishNotesText = ref('')
 
 const newFieldName = ref('')
 const newFieldOperation = ref('')
 
-const fields = ref<MechanicField[]>([
-  { id: 'field-5', name: 'Поле #5', operation: 'Пахота' },
-  { id: 'field-12', name: 'Поле #12', operation: 'Посев' },
-  { id: 'field-3', name: 'Поле #3', operation: 'Опрыскивание' },
-  { id: 'field-8', name: 'Поле #8', operation: 'Уборка' },
-])
-
-const currentFieldId = ref<string | null>(active.value?.fieldId ?? fields.value[0]?.id ?? null)
+const fields = ref<MechanicField[]>([])
+const currentFieldId = ref<string | null>(active.value?.fieldId ?? null)
 
 const reasons = ref<Array<{ label: string; description: string; category: DowntimeCategory }>>([...DEFAULT_REASONS])
 const workOperationsList = ref<WorkOperationRow[]>([])
@@ -93,6 +95,15 @@ onMounted(async () => {
   }, 1000)
   if (isSupabaseConfigured()) {
     try {
+      const fieldRows: FieldRow[] = await loadFields()
+      fields.value = fieldRows.map((f) => ({
+        id: f.id,
+        name: `Поле №${f.number} — ${f.name}`,
+        operation: 'Операция не выбрана',
+      }))
+      if (!currentFieldId.value && fields.value.length) {
+        currentFieldId.value = fields.value[0].id
+      }
       const fromDb = await loadDowntimeReasons()
       if (fromDb.length) {
         reasons.value = fromDb.map((r: DowntimeReasonRow) => ({
@@ -135,7 +146,6 @@ const progressPercent = 65
 const progressDone = 32
 const progressTotal = 50
 
-const equipmentStatus = { fuelPercent: 45, engineTemp: 85, engineOk: true, operatingHours: 1240 }
 const queueTasks = computed(() => {
   const list = fields.value.filter((f) => f.id !== currentField.value?.id).slice(0, 4)
   const areas = [120, 85, 200, 60]
@@ -161,7 +171,34 @@ function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   isStartedModalOpen.value = true
 }
 
-function stopDowntime() {
+function openFinishNotesModal(type: 'downtime' | 'operation') {
+  finishNotesType.value = type
+  finishNotesText.value = ''
+  finishNotesModalOpen.value = true
+}
+
+function closeFinishNotesModal() {
+  finishNotesModalOpen.value = false
+  finishNotesType.value = null
+  finishNotesText.value = ''
+}
+
+function confirmFinishNotes(notes: string | null) {
+  const type = finishNotesType.value
+  closeFinishNotesModal()
+  const notesVal = notes?.trim() || undefined
+  if (type === 'downtime') {
+    stopDowntimeWithNotes(notesVal)
+    isFinishedModalType.value = 'downtime'
+  } else if (type === 'operation') {
+    stopOperationWithNotes(notesVal)
+    isFinishedModalType.value = 'operation'
+  }
+  finishNotesText.value = ''
+  isFinishedModalOpen.value = true
+}
+
+function stopDowntimeWithNotes(notes?: string) {
   if (!active.value) return
   const now = new Date()
   const start = new Date(active.value.startISO)
@@ -178,6 +215,7 @@ function stopDowntime() {
     fieldId: active.value.fieldId,
     fieldName: active.value.fieldName,
     operation: active.value.operation,
+    notes,
   }
   appendEvent(event)
   if (isSupabaseConfigured()) {
@@ -186,7 +224,31 @@ function stopDowntime() {
 
   active.value = null
   saveActive(null)
-  isFinishedModalOpen.value = true
+}
+
+function stopOperationWithNotes(notes?: string) {
+  if (!workStartedAt.value) return
+  const now = new Date()
+  const start = new Date(workStartedAt.value)
+  const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
+  const field = currentField.value
+  const op = {
+    id: now.getTime(),
+    employee: employeeDisplayName.value,
+    fieldId: field?.id,
+    fieldName: field?.name,
+    operation: field?.operation,
+    startISO: workStartedAt.value,
+    endISO: now.toISOString(),
+    durationMinutes,
+    notes,
+  }
+  appendOperation(op)
+  if (isSupabaseConfigured()) {
+    insertOperation(op, auth.user.value?.id ?? null).catch(() => {})
+  }
+  saveActiveOperation(null)
+  workStartedAt.value = null
 }
 
 function setCurrentField(id: string) {
@@ -222,34 +284,9 @@ function startOperationByName(op: WorkOperationRow) {
   isOperationsOpen.value = false
 }
 
-function stopOperation() {
-  if (!workStartedAt.value) return
-  const now = new Date()
-  const start = new Date(workStartedAt.value)
-  const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
-  const field = currentField.value
-  const op = {
-    id: now.getTime(),
-    employee: employeeDisplayName.value,
-    fieldId: field?.id,
-    fieldName: field?.name,
-    operation: field?.operation,
-    startISO: workStartedAt.value,
-    endISO: now.toISOString(),
-    durationMinutes,
-  }
-  appendOperation(op)
-  if (isSupabaseConfigured()) {
-    insertOperation(op, auth.user.value?.id ?? null).catch(() => {})
-  }
-  saveActiveOperation(null)
-  workStartedAt.value = null
-}
 
 function openAddField() {
-  newFieldName.value = ''
-  newFieldOperation.value = ''
-  isAddFieldOpen.value = true
+  router.push({ name: 'fields', query: { highlightAddField: '1' } })
 }
 
 function addField() {
@@ -321,7 +358,7 @@ function addField() {
               v-if="!active && workStartedAt"
               class="btn-operation btn-operation-stop"
               type="button"
-              @click="stopOperation"
+              @click="openFinishNotesModal('operation')"
             >
               Остановить операцию
             </button>
@@ -329,7 +366,7 @@ function addField() {
               v-if="active"
               class="btn-operation btn-operation-stop"
               type="button"
-              @click="stopDowntime"
+              @click="openFinishNotesModal('downtime')"
             >
               Завершить простой
             </button>
@@ -337,36 +374,21 @@ function addField() {
         </section>
 
         <section class="mechanic-cards page-enter-item" style="--enter-delay: 120ms">
-          <div class="mechanic-card mechanic-card-equipment">
-            <div class="mechanic-card-header">
-              <div class="mechanic-card-title">Статус техники (John Deere 8R)</div>
-              <span class="mechanic-card-badge">Тестовые данные</span>
-            </div>
-            <div class="mechanic-equipment-row">
-              <span class="mechanic-equipment-label">Топливо</span>
-              <span class="mechanic-equipment-value">{{ equipmentStatus.fuelPercent }}%</span>
-            </div>
-            <div class="mechanic-progress-bar mechanic-progress-bar-yellow">
-              <div class="mechanic-progress-fill" :style="{ width: equipmentStatus.fuelPercent + '%' }" />
-            </div>
-            <div class="mechanic-equipment-row">
-              <span class="mechanic-equipment-label">Температура ДВС</span>
-              <span class="mechanic-equipment-value">{{ equipmentStatus.engineTemp }}°C</span>
-            </div>
-            <div class="mechanic-progress-bar mechanic-progress-bar-green">
-              <div class="mechanic-progress-fill" :style="{ width: 85 + '%' }" />
-            </div>
-            <div class="mechanic-equipment-ok" v-if="equipmentStatus.engineOk">В норме</div>
-            <div class="mechanic-equipment-row">
-              <span class="mechanic-equipment-label">Наработка (моточасы)</span>
-              <span class="mechanic-equipment-value">{{ equipmentStatus.operatingHours }} ч</span>
-            </div>
-          </div>
-
           <div class="mechanic-card mechanic-card-queue">
-            <div class="mechanic-card-header">
-              <div class="mechanic-card-title">Очередь задач</div>
-              <button type="button" class="mechanic-card-link">Все поля</button>
+            <div class="mechanic-card-header mechanic-card-header--stacked">
+              <div>
+                <div class="mechanic-card-title">Поля и задачи</div>
+                <div class="mechanic-card-subtitle">
+                  Выберите поле, затем начните простой или операцию выше
+                </div>
+              </div>
+              <button
+                type="button"
+                class="mechanic-card-link"
+                @click="router.push({ name: 'fields' })"
+              >
+                Все поля
+              </button>
             </div>
             <div class="mechanic-queue-list">
               <button
@@ -377,7 +399,7 @@ function addField() {
                 @click="setCurrentField(t.id)"
               >
                 <span class="mechanic-queue-name">{{ t.name }}</span>
-                <span class="mechanic-queue-op">{{ t.operation }} · {{ t.area }} Га</span>
+                <span class="mechanic-queue-op">{{ t.operation }}</span>
               </button>
             </div>
             <button class="mechanic-queue-add" type="button" @click="openAddField">+ Добавить поле</button>
@@ -509,15 +531,59 @@ function addField() {
     </div>
 
     <div
+      v-if="finishNotesModalOpen"
+      class="modal-backdrop"
+      @click="closeFinishNotesModal"
+    >
+      <div class="modal" @click.stop>
+        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-title-row">
+          <div class="modal-title">
+            {{ finishNotesType === 'downtime' ? 'Завершить простой' : 'Остановить операцию' }}
+          </div>
+          <button
+            type="button"
+            class="modal-close-btn"
+            aria-label="Закрыть без завершения"
+            @click="closeFinishNotesModal"
+          >
+            ×
+          </button>
+        </div>
+        <p class="modal-text modal-text-muted">
+          По желанию укажите список дел, которые были выполнены. Заметки сохранятся и будут видны в журнале работ и аналитике.
+        </p>
+        <div class="modal-form">
+          <label class="modal-field">
+            <span class="modal-label">Список дел (что сделано)</span>
+            <textarea
+              v-model="finishNotesText"
+              class="modal-textarea"
+              rows="4"
+              placeholder="Например: Замена масла, проверка подшипников, дозаправка..."
+            />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn" type="button" @click="confirmFinishNotes(finishNotesText)">
+            Сохранить и завершить
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div
       v-if="isFinishedModalOpen"
       class="modal-backdrop"
       @click="isFinishedModalOpen = false"
     >
       <div class="modal" @click.stop>
         <div class="modal-badge">Агро-Контроль</div>
-        <div class="modal-title">Простой завершён</div>
+        <div class="modal-title">
+          {{ isFinishedModalType === 'downtime' ? 'Простой завершён' : 'Операция завершена' }}
+        </div>
         <p class="modal-text">
-          Запись сохранена. Простой отображается в разделе «Аналитика» и в журнале работ.
+          Запись сохранена. Данные отображаются в разделе «Аналитика» и в журнале работ.
         </p>
         <button class="modal-btn" type="button" @click="isFinishedModalOpen = false">
           Закрыть
@@ -1105,6 +1171,10 @@ function addField() {
   animation: mechanicFadeIn 0.2s ease;
 }
 
+[data-theme='dark'] .modal-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
 .modal {
   width: min(100vw - 48px, 360px);
   background: var(--bg-panel);
@@ -1113,6 +1183,11 @@ function addField() {
   padding: var(--space-lg);
   box-shadow: var(--shadow-card), 0 20px 40px rgba(0, 0, 0, 0.2);
   animation: mechanicModalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme='dark'] .modal {
+  background: rgba(18, 32, 20, 0.98);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 @keyframes mechanicFadeIn {
@@ -1134,10 +1209,32 @@ function addField() {
   margin-bottom: 6px;
 }
 
+.modal-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
 .modal-title {
   font-size: 1.15rem;
   font-weight: 500;
   margin-bottom: 8px;
+}
+
+.modal-close-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.modal-close-btn:hover {
+  background: var(--chip-bg);
 }
 
 .modal-text {
@@ -1181,6 +1278,22 @@ function addField() {
 }
 
 .modal-field input::placeholder {
+  color: var(--text-secondary);
+}
+
+.modal-textarea {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.modal-textarea::placeholder {
   color: var(--text-secondary);
 }
 

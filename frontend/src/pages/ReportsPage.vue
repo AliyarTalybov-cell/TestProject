@@ -465,6 +465,7 @@ function formatDate(iso: string): string {
                   <th>Дата</th>
                   <th>Время</th>
                   <th class="text-right">Длительность</th>
+                  <th>Список дел</th>
                 </tr>
               </thead>
               <tbody>
@@ -498,6 +499,10 @@ function formatDate(iso: string): string {
                   </td>
                   <td class="cell-duration text-right">
                     {{ formatDuration(event.durationMinutes) }}
+                  </td>
+                  <td class="cell-notes">
+                    <span v-if="event.notes" class="cell-notes-text">{{ event.notes }}</span>
+                    <span v-else class="cell-notes-empty">—</span>
                   </td>
                 </tr>
               </tbody>
@@ -608,6 +613,7 @@ function formatDate(iso: string): string {
                   <th>Дата</th>
                   <th>Время</th>
                   <th class="text-right">Длительность</th>
+                  <th>Список дел</th>
                 </tr>
               </thead>
               <tbody>
@@ -626,6 +632,10 @@ function formatDate(iso: string): string {
                   </td>
                   <td class="cell-duration text-right">
                     {{ formatDuration(op.durationMinutes) }}
+                  </td>
+                  <td class="cell-notes">
+                    <span v-if="op.notes" class="cell-notes-text">{{ op.notes }}</span>
+                    <span v-else class="cell-notes-empty">—</span>
                   </td>
                 </tr>
               </tbody>
@@ -1034,6 +1044,21 @@ tbody tr:hover td {
 .cell-duration {
   font-variant-numeric: tabular-nums;
   font-weight: 500;
+}
+
+.cell-notes {
+  max-width: 220px;
+  font-size: 0.875rem;
+}
+
+.cell-notes-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cell-notes-empty {
+  color: var(--text-secondary);
 }
 
 .reason-dot {

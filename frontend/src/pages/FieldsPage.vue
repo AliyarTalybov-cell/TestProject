@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import {
   isSupabaseConfigured,
@@ -82,11 +82,13 @@ type Field = {
 }
 
 const router = useRouter()
+const route = useRoute()
 
 const fields = ref<Field[]>([])
 const fieldsLoading = ref(false)
 const fieldsError = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
+const highlightAddField = ref(false)
 
 function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cropsList: CropRow[]): Field {
   const responsiblePerson = row.responsible_id ? (profileMap.get(row.responsible_id)?.display_name || profileMap.get(row.responsible_id)?.email || '') : ''
@@ -904,6 +906,12 @@ const TABS: { id: PageTab; label: string }[] = [
 ]
 
 onMounted(async () => {
+  if (route.query.highlightAddField === '1') {
+    highlightAddField.value = true
+    setTimeout(() => {
+      highlightAddField.value = false
+    }, 1600)
+  }
   if (isSupabaseConfigured()) {
     await loadRefs()
     await loadFieldsData()
@@ -923,7 +931,13 @@ onMounted(async () => {
           <h1 class="fields-title">Поля и культуры</h1>
           <p v-show="activeTab === 'fields'" class="fields-subtitle">Реестр сельскохозяйственных угодий и назначение ответственных</p>
         </div>
-        <button v-show="activeTab === 'fields'" class="fields-add-btn" type="button" @click="openAddField">
+        <button
+          v-show="activeTab === 'fields'"
+          class="fields-add-btn"
+          :class="{ 'fields-add-btn--highlight': highlightAddField }"
+          type="button"
+          @click="openAddField"
+        >
           <svg class="fields-add-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
           Добавить поле
         </button>
@@ -1707,6 +1721,25 @@ onMounted(async () => {
   cursor: pointer;
   transition: background 0.2s ease, box-shadow 0.2s ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.fields-add-btn--highlight {
+  position: relative;
+  z-index: 1;
+  animation: fields-add-pulse 1.2s ease-out 0s 1;
+}
+@keyframes fields-add-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.75);
+  }
+  70% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 18px rgba(34, 197, 94, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
 }
 .fields-add-btn:hover {
   background: var(--accent-green-hover);

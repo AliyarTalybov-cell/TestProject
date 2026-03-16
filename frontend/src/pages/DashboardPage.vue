@@ -21,6 +21,7 @@ type DowntimeEvent = {
   durationMinutes: number
   status: DowntimeStatus
   range: DateRangeKey
+  notes?: string
 }
 
 function getRangeKey(iso: string): DateRangeKey {
@@ -47,6 +48,7 @@ function mapStoredToEvent(e: StoredDowntime): DowntimeEvent {
     durationMinutes: e.durationMinutes,
     status: 'resolved',
     range: getRangeKey(e.startISO),
+    notes: e.notes,
   }
 }
 
@@ -342,12 +344,13 @@ const donutStyle = computed(() => {
                 <th>Начало</th>
                 <th>Конец</th>
                 <th>Длительность</th>
+                <th>Список дел</th>
                 <th>Статус</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!filteredEvents.length">
-                <td colspan="6" class="empty-cell">
+                <td colspan="7" class="empty-cell">
                   Нет записей для выбранных фильтров
                 </td>
               </tr>
@@ -376,6 +379,10 @@ const donutStyle = computed(() => {
                 </td>
                 <td class="col-duration">
                   {{ event.durationMinutes }}&nbsp;мин
+                </td>
+                <td class="col-notes">
+                  <span v-if="event.notes" class="notes-text">{{ event.notes }}</span>
+                  <span v-else class="notes-empty">—</span>
                 </td>
                 <td>
                   <span
@@ -733,6 +740,21 @@ tbody tr:hover td {
 .col-duration {
   font-variant-numeric: tabular-nums;
   font-weight: 500;
+}
+
+.col-notes {
+  max-width: 200px;
+  font-size: 0.875rem;
+}
+
+.notes-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notes-empty {
+  color: var(--text-secondary);
 }
 
 .reason-pill {

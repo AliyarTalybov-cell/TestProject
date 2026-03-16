@@ -7,6 +7,7 @@ export type StoredOperation = {
   startISO: string
   endISO: string
   durationMinutes: number
+  notes?: string
 }
 
 export type ActiveOperation = {

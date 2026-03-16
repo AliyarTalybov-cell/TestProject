@@ -14,6 +14,7 @@ export type DowntimeRow = {
   field_id: string | null
   field_name: string | null
   operation: string | null
+  notes: string | null
 }
 
 export type OperationRow = {
@@ -26,6 +27,7 @@ export type OperationRow = {
   start_iso: string
   end_iso: string
   duration_minutes: number
+  notes: string | null
 }
 
 function rowToDowntime(r: DowntimeRow): StoredDowntime {
@@ -40,6 +42,7 @@ function rowToDowntime(r: DowntimeRow): StoredDowntime {
     fieldId: r.field_id ?? undefined,
     fieldName: r.field_name ?? undefined,
     operation: r.operation ?? undefined,
+    notes: r.notes ?? undefined,
   }
 }
 
@@ -53,6 +56,7 @@ function rowToOperation(r: OperationRow): StoredOperation {
     startISO: r.start_iso,
     endISO: r.end_iso,
     durationMinutes: r.duration_minutes,
+    notes: r.notes ?? undefined,
   }
 }
 
@@ -72,6 +76,7 @@ export async function insertDowntime(
     field_id: event.fieldId ?? null,
     field_name: event.fieldName ?? null,
     operation: event.operation ?? null,
+    notes: event.notes?.trim() || null,
   })
 }
 
@@ -89,6 +94,7 @@ export async function insertOperation(
     start_iso: op.startISO,
     end_iso: op.endISO,
     duration_minutes: op.durationMinutes,
+    notes: op.notes?.trim() || null,
   })
 }
 
@@ -99,7 +105,7 @@ export async function loadDowntimesFromSupabase(
   if (!supabase) return []
   let q = supabase
     .from('downtimes')
-    .select('id, user_id, employee, reason, category, start_iso, end_iso, duration_minutes, field_id, field_name, operation')
+    .select('id, user_id, employee, reason, category, start_iso, end_iso, duration_minutes, field_id, field_name, operation, notes')
     .order('start_iso', { ascending: false })
   if (onlyCurrentUser && userId) {
     q = q.eq('user_id', userId)
@@ -116,7 +122,7 @@ export async function loadOperationsFromSupabase(
   if (!supabase) return []
   let q = supabase
     .from('operations')
-    .select('id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes')
+    .select('id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes, notes')
     .order('start_iso', { ascending: false })
   if (onlyCurrentUser && userId) {
     q = q.eq('user_id', userId)
