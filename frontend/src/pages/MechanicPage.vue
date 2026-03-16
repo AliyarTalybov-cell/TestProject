@@ -13,6 +13,7 @@ import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperat
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
 import { useAuth } from '@/stores/auth'
+import { loadCalendarTasks, updateCalendarTask, type CalendarTaskRow } from '@/lib/calendarTasksSupabase'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
@@ -113,6 +114,18 @@ onMounted(async () => {
         }))
       }
       workOperationsList.value = await loadWorkOperations()
+      const uid = auth.user.value?.id ?? null
+      if (uid) {
+        todayTasksLoading.value = true
+        try {
+          const all = await loadCalendarTasks(uid)
+          todayTasks.value = all.filter((t) => t.date === todayKey.value)
+        } catch {
+          todayTasks.value = []
+        } finally {
+          todayTasksLoading.value = false
+        }
+      }
     } catch {
       // оставляем дефолтные причины и пустой список операций
     }
@@ -151,6 +164,45 @@ const queueTasks = computed(() => {
   const areas = [120, 85, 200, 60]
   return list.map((f, i) => ({ id: f.id, name: f.name, operation: f.operation, area: areas[i] ?? 0 }))
 })
+
+const todayKey = computed(() => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+})
+
+const todayTasks = ref<CalendarTaskRow[]>([])
+const todayTasksLoading = ref(false)
+const todayTaskTogglingId = ref<string | null>(null)
+
+const todayTasksPending = computed(() => todayTasks.value.filter((t) => !t.completed_at))
+const todayTasksDone = computed(() => todayTasks.value.filter((t) => t.completed_at))
+
+async function toggleTodayTask(t: CalendarTaskRow) {
+  if (todayTaskTogglingId.value) return
+  todayTaskTogglingId.value = t.id
+  try {
+    await updateCalendarTask(t.id, {
+      completed_at: t.completed_at ? null : new Date().toISOString(),
+    })
+    const idx = todayTasks.value.findIndex((x) => x.id === t.id)
+    if (idx !== -1) {
+      const next = [...todayTasks.value]
+      next[idx] = {
+        ...next[idx],
+        completed_at: t.completed_at ? null : new Date().toISOString(),
+      }
+      todayTasks.value = next
+    }
+  } catch (e) {
+    console.error(e)
+  } finally {
+    todayTaskTogglingId.value = null
+  }
+}
+
+function priorityLabel(priority: string): string {
+  return priority === 'high' ? 'Высокий' : priority === 'low' ? 'Низкий' : 'Обычный'
+}
 
 function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   workStartedAt.value = null
@@ -371,6 +423,81 @@ function addField() {
               Завершить простой
             </button>
           </div>
+        </section>
+
+        <section class="mechanic-today-tasks page-enter-item" style="--enter-delay: 90ms">
+          <div class="mechanic-today-tasks-head">
+            <span class="mechanic-today-tasks-title">Задачи на сегодня</span>
+            <router-link to="/tasks" class="mechanic-today-tasks-link">Календарь</router-link>
+          </div>
+          <div v-if="todayTasksLoading" class="mechanic-today-tasks-loading">Загрузка…</div>
+          <template v-else-if="todayTasks.length">
+            <div v-if="todayTasksPending.length" class="mechanic-today-tasks-group">
+              <div class="mechanic-today-tasks-group-title">К выполнению</div>
+              <ul class="mechanic-today-tasks-list">
+                <li
+                  v-for="t in todayTasksPending"
+                  :key="t.id"
+                  class="mechanic-today-task"
+                >
+                  <button
+                    type="button"
+                    class="mechanic-today-task-check"
+                    :aria-label="'Отметить выполненным'"
+                    :disabled="todayTaskTogglingId === t.id"
+                    @click="toggleTodayTask(t)"
+                  >
+                    <span class="mechanic-today-task-check-empty" />
+                  </button>
+                  <span class="mechanic-today-task-time">{{ t.start_time || '—' }}<template v-if="t.end_time">–{{ t.end_time }}</template></span>
+                  <span class="mechanic-today-task-title">{{ t.title }}</span>
+                  <span
+                    class="mechanic-today-task-priority"
+                    :class="{
+                      'mechanic-today-task-priority--high': t.priority === 'high',
+                      'mechanic-today-task-priority--low': t.priority === 'low',
+                    }"
+                  >
+                    {{ priorityLabel(t.priority) }}
+                  </span>
+                </li>
+              </ul>
+            </div>
+            <div v-if="todayTasksDone.length" class="mechanic-today-tasks-group">
+              <div class="mechanic-today-tasks-group-title mechanic-today-tasks-group-title--done">Выполнено</div>
+              <ul class="mechanic-today-tasks-list">
+                <li
+                  v-for="t in todayTasksDone"
+                  :key="t.id"
+                  class="mechanic-today-task mechanic-today-task--done"
+                >
+                  <button
+                    type="button"
+                    class="mechanic-today-task-check"
+                    aria-label="Снять отметку"
+                    :disabled="todayTaskTogglingId === t.id"
+                    @click="toggleTodayTask(t)"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                  </button>
+                  <span class="mechanic-today-task-time">{{ t.start_time || '—' }}<template v-if="t.end_time">–{{ t.end_time }}</template></span>
+                  <span class="mechanic-today-task-title">{{ t.title }}</span>
+                  <span
+                    class="mechanic-today-task-priority mechanic-today-task-priority--muted"
+                    :class="{
+                      'mechanic-today-task-priority--high': t.priority === 'high',
+                      'mechanic-today-task-priority--low': t.priority === 'low',
+                    }"
+                  >
+                    {{ priorityLabel(t.priority) }}
+                  </span>
+                </li>
+              </ul>
+            </div>
+          </template>
+          <p v-else class="mechanic-today-tasks-empty">На сегодня задач нет</p>
         </section>
 
         <section class="mechanic-cards page-enter-item" style="--enter-delay: 120ms">
@@ -767,6 +894,178 @@ function addField() {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-md);
+}
+
+.mechanic-today-tasks {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: var(--space-md) var(--space-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.mechanic-today-tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mechanic-today-tasks-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.mechanic-today-tasks-link {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--accent-green);
+  text-decoration: none;
+}
+
+.mechanic-today-tasks-link:hover {
+  text-decoration: underline;
+}
+
+.mechanic-today-tasks-loading,
+.mechanic-today-tasks-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.mechanic-today-tasks-group {
+  margin-bottom: 12px;
+}
+
+.mechanic-today-tasks-group:last-child {
+  margin-bottom: 0;
+}
+
+.mechanic-today-tasks-group-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.mechanic-today-tasks-group-title--done {
+  color: var(--text-secondary);
+  opacity: 0.9;
+}
+
+.mechanic-today-tasks-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mechanic-today-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-size: 0.85rem;
+  background: var(--bg-base);
+}
+
+.mechanic-today-task--done {
+  background: var(--bg-panel);
+  border-color: var(--border-color);
+}
+
+.mechanic-today-task-check {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--agro, #3d5c40);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mechanic-today-task-check:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.mechanic-today-task-check-empty {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-color);
+  border-radius: 4px;
+  display: block;
+}
+
+.mechanic-today-task-check:hover .mechanic-today-task-check-empty {
+  border-color: var(--agro, #3d5c40);
+}
+
+.mechanic-today-task-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  min-width: 68px;
+  font-size: 0.8rem;
+}
+
+.mechanic-today-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mechanic-today-task-priority {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: rgba(61, 92, 64, 0.12);
+  color: var(--agro, #3d5c40);
+}
+
+.mechanic-today-task-priority--high {
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+}
+
+.mechanic-today-task-priority--low {
+  background: rgba(59, 130, 246, 0.08);
+  color: #1d4ed8;
+}
+
+.mechanic-today-task-priority--muted {
+  opacity: 0.85;
+}
+
+.mechanic-today-task--done .mechanic-today-task-title {
+  text-decoration: line-through;
+  color: var(--text-secondary);
+}
+
+.mechanic-today-task--done .mechanic-today-task-time {
+  color: var(--text-secondary);
+  opacity: 0.85;
 }
 
 .btn-operation {
