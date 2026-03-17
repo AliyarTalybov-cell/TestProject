@@ -13,10 +13,14 @@ import {
   createTask as createTaskApi,
   updateTask as updateTaskApi,
   deleteTask as deleteTaskApi,
+  loadTaskComments,
+  addTaskComment,
+  loadTaskEvents,
+  addTaskEvent,
 } from '@/lib/tasksSupabase'
 import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
 import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
-import type { Task as TaskType, ProfileRow } from '@/lib/tasksSupabase'
+import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow } from '@/lib/tasksSupabase'
 
 type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
@@ -63,6 +67,14 @@ let clickAfterDragGuard = false
 const tasksLoading = ref(true)
 const tasks = ref<Task[]>([])
 const profiles = ref<ProfileRow[]>([])
+const taskComments = ref<TaskCommentRow[]>([])
+const taskEvents = ref<TaskEventRow[]>([])
+const commentsLoading = ref(false)
+const eventsLoading = ref(false)
+const newCommentMessage = ref('')
+const isEditingDetail = ref(false)
+const isSavingDetail = ref(false)
+const isSendingComment = ref(false)
 const assignees = computed<AssigneeOption[]>(() => {
   if (!auth.user.value) return []
   const list = profiles.value.map((p) => ({
@@ -91,6 +103,38 @@ const currentUserAssignee = computed<AssigneeOption | null>(() => {
 })
 
 const isManager = computed(() => auth.userRole.value === 'manager')
+
+const profilesMap = computed(() => new Map(profiles.value.map((p) => [p.id, p])))
+
+function profileName(userId: string | null | undefined): string {
+  if (!userId) return 'Система'
+  const p = profilesMap.value.get(userId)
+  if (!p) return 'Система'
+  return (p.display_name || p.email || '').trim() || 'Сотрудник'
+}
+
+function profileInitials(userId: string | null | undefined): string {
+  if (!userId) return 'С'
+  const p = profilesMap.value.get(userId)
+  if (!p) return 'С'
+  const base = (p.display_name || p.email || '').trim()
+  const parts = base.split(/\s+/)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  return base.slice(0, 2).toUpperCase()
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 async function loadData() {
   if (!isSupabaseConfigured() || !auth.user.value) {
@@ -300,7 +344,7 @@ async function searchTaskByNumber() {
         return true
       })
     }
-    const task = list[num - 1] ?? null
+    const task = list.find((t) => t.number === num) ?? null
     tasks.value = task ? [task] : []
   } catch {
     tasks.value = []
@@ -343,6 +387,30 @@ const selectedTask = computed(() =>
     : null
 )
 
+const selectedTaskCreatorName = computed(() => (selectedTask.value?.createdBy?.name ?? '—'))
+const selectedTaskCreatedAt = computed(() => formatDateTime(selectedTask.value?.createdAt))
+
+async function loadMetaForTask(taskId: string) {
+  if (!isSupabaseConfigured() || !auth.user.value) {
+    taskComments.value = []
+    taskEvents.value = []
+    return
+  }
+  commentsLoading.value = true
+  eventsLoading.value = true
+  try {
+    const [comments, events] = await Promise.all([loadTaskComments(taskId), loadTaskEvents(taskId)])
+    taskComments.value = comments
+    taskEvents.value = events
+  } catch {
+    taskComments.value = []
+    taskEvents.value = []
+  } finally {
+    commentsLoading.value = false
+    eventsLoading.value = false
+  }
+}
+
 function openCreate() {
   editingTaskId.value = null
   const d = new Date()
@@ -375,8 +443,7 @@ function openEdit() {
     description: task.description ?? '',
   }
   editingTaskId.value = task.id
-  showCreateModal.value = true
-  closeTask()
+  isEditingDetail.value = true
 }
 
 function closeCreate() {
@@ -389,34 +456,7 @@ async function createTask() {
   if (!title) return
   const assignee = assignees.value.find((a) => a.id === form.value.assigneeId) ?? assignees.value[0]
   if (!assignee) return
-  if (editingTaskId.value) {
-    if (!isSupabaseConfigured()) return
-    try {
-      const payload: Parameters<typeof updateTaskApi>[1] = {
-        title,
-        priority: form.value.priority,
-        field: form.value.field,
-        due_date: form.value.dueDate || '—',
-        work_type: form.value.workType,
-        description: form.value.description.trim() || undefined,
-      }
-      if (isManager.value && assignee.id) payload.assignee_id = assignee.id
-      await updateTaskApi(editingTaskId.value, payload)
-      await loadData()
-    } catch {
-      // fallback: update local
-      const t = tasks.value.find((x) => x.id === editingTaskId.value)
-      if (t) {
-        t.title = title
-        t.assignee = { id: assignee.id, name: assignee.name, initials: assignee.initials }
-        t.priority = form.value.priority
-        t.field = form.value.field
-        t.dueDate = form.value.dueDate || '—'
-        t.workType = form.value.workType || undefined
-        t.description = form.value.description.trim() || undefined
-      }
-    }
-  } else {
+  if (!editingTaskId.value) {
     if (!isSupabaseConfigured() || !auth.user.value) return
     try {
       await createTaskApi(
@@ -440,12 +480,112 @@ async function createTask() {
   closeCreate()
 }
 
-function openTask(id: string) {
+async function saveDetailEdit() {
+  const task = selectedTask.value
+  if (!task || !editingTaskId.value) return
+  if (isSavingDetail.value) return
+  const prevField = task.field
+  const prevWorkType = task.workType ?? ''
+  const title = form.value.title.trim()
+  if (!title) return
+  const assignee = assignees.value.find((a) => a.id === form.value.assigneeId) ?? assignees.value[0]
+  if (!assignee) return
+  isSavingDetail.value = true
+  if (!isSupabaseConfigured()) {
+    // локальное обновление без Supabase
+    const t = tasks.value.find((x) => x.id === editingTaskId.value)
+    if (t) {
+      t.title = title
+      t.assignee = { id: assignee.id, name: assignee.name, initials: assignee.initials }
+      t.priority = form.value.priority
+      t.field = form.value.field
+      t.dueDate = form.value.dueDate || '—'
+      t.workType = form.value.workType || undefined
+      t.description = form.value.description.trim() || undefined
+    }
+    isEditingDetail.value = false
+    isSavingDetail.value = false
+    return
+  }
+  try {
+    const payload: Parameters<typeof updateTaskApi>[1] = {
+      title,
+      priority: form.value.priority,
+      field: form.value.field,
+      due_date: form.value.dueDate || '—',
+      work_type: form.value.workType,
+      description: form.value.description.trim() || undefined,
+    }
+    if (isManager.value && assignee.id) payload.assignee_id = assignee.id
+    await updateTaskApi(editingTaskId.value, payload)
+    await loadData()
+  } catch {
+    const t = tasks.value.find((x) => x.id === editingTaskId.value)
+    if (t) {
+      t.title = title
+      t.assignee = { id: assignee.id, name: assignee.name, initials: assignee.initials }
+      t.priority = form.value.priority
+      t.field = form.value.field
+      t.dueDate = form.value.dueDate || '—'
+      t.workType = form.value.workType || undefined
+      t.description = form.value.description.trim() || undefined
+    }
+  } finally {
+    // события истории по изменению типа работ и локации
+    const newField = form.value.field
+    const newWorkType = form.value.workType || ''
+    const userId = auth.user.value?.id ?? null
+    if (newField !== prevField) {
+      addTaskEvent({
+        taskId: editingTaskId.value,
+        userId,
+        eventType: 'field_changed',
+        payload: { from: prevField, to: newField },
+      })
+    }
+    if (newWorkType !== prevWorkType) {
+      addTaskEvent({
+        taskId: editingTaskId.value,
+        userId,
+        eventType: 'work_type_changed',
+        payload: { from: prevWorkType || null, to: newWorkType || null },
+      })
+    }
+    isEditingDetail.value = false
+    isSavingDetail.value = false
+  }
+}
+
+function cancelDetailEdit() {
+  const task = selectedTask.value
+  if (!task) {
+    isEditingDetail.value = false
+    return
+  }
+  const assigneeId = (task.assignee as { id?: string }).id ?? assignees.value[0]?.id ?? ''
+  form.value = {
+    title: task.title,
+    assigneeId,
+    field: task.field,
+    priority: task.priority,
+    dueDate: task.dueDate === '—' ? '' : task.dueDate,
+    workType: task.workType ?? (workTypes.value[0] || ''),
+    description: task.description ?? '',
+  }
+  isEditingDetail.value = false
+}
+
+async function openTask(id: string) {
   if (clickAfterDragGuard) return
   selectedTaskId.value = id
+  await loadMetaForTask(id)
 }
 function closeTask() {
   selectedTaskId.value = null
+  taskComments.value = []
+  taskEvents.value = []
+  newCommentMessage.value = ''
+  isEditingDetail.value = false
 }
 
 async function updateTaskStatus(taskId: string, newStatus: Status) {
@@ -455,9 +595,40 @@ async function updateTaskStatus(taskId: string, newStatus: Status) {
   if (isSupabaseConfigured()) {
     try {
       await updateTaskApi(taskId, { status: newStatus })
+      await addTaskEvent({
+        taskId,
+        userId: auth.user.value?.id ?? null,
+        eventType: 'status_changed',
+        payload: { from: prevStatus, to: newStatus },
+      })
     } catch {
       if (t && prevStatus !== undefined) t.status = prevStatus
     }
+  }
+}
+
+async function submitComment() {
+  const task = selectedTask.value
+  const user = auth.user.value
+  if (!task || !user) return
+  const text = newCommentMessage.value.trim()
+  if (!text) return
+  if (isSendingComment.value) return
+  isSendingComment.value = true
+  try {
+    const comment = await addTaskComment(task.id, user.id, text)
+    taskComments.value.push(comment)
+    newCommentMessage.value = ''
+    await addTaskEvent({
+      taskId: task.id,
+      userId: user.id,
+      eventType: 'comment_added',
+      payload: { preview: text.slice(0, 140) },
+    })
+  } catch {
+    // ignore for now
+  } finally {
+    isSendingComment.value = false
   }
 }
 
@@ -1045,57 +1216,272 @@ function statusClass(s: Status) {
       <div v-if="selectedTask" class="task-modal-backdrop" @click.self="closeTask">
         <div class="task-modal task-modal--detail" role="dialog" aria-labelledby="task-detail-title">
           <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeTask">×</button>
-          <div class="task-detail-badges">
-            <span class="task-pill task-pill-status" :class="selectedTask ? statusClass(selectedTask.status) : ''">{{ statusColumns.find((c) => c.key === selectedTask?.status)?.title }}</span>
-            <span class="task-pill" :class="priorityClass(selectedTask.priority)">
-              {{ selectedTask.priority === 'high' ? 'Высокий приоритет' : selectedTask.priority === 'medium' ? 'Средний' : 'Низкий' }}
-            </span>
-          </div>
-          <h2 id="task-detail-title" class="task-detail-title">{{ selectedTask.title }}</h2>
-          <dl class="task-detail-list">
-            <div class="task-detail-item">
-              <dt class="task-detail-label">Номер задачи</dt>
-              <dd class="task-detail-value">№ {{ getTaskNumber(selectedTask.id) || '—' }}</dd>
-            </div>
-            <div class="task-detail-item">
-              <dt class="task-detail-label">Исполнитель</dt>
-              <dd class="task-detail-value">
-                <span class="task-detail-avatar">{{ selectedTask.assignee.initials }}</span>
-                {{ selectedTask.assignee.name }}
-              </dd>
-            </div>
-            <div class="task-detail-item">
-              <dt class="task-detail-label">Статус</dt>
-              <dd class="task-detail-value">
-                <select
-                  :value="selectedTask.status"
-                  class="task-detail-status-select"
-                  @change="(e) => selectedTask && updateTaskStatus(selectedTask.id, (e.target as HTMLSelectElement).value as Status)"
+          <div class="task-detail-layout">
+            <div class="task-detail-main">
+              <div class="task-detail-badges">
+                <span
+                  class="task-pill task-pill-status"
+                  :class="selectedTask ? statusClass(selectedTask.status) : ''"
                 >
-                  <option v-for="col in statusColumns" :key="col.key" :value="col.key">{{ col.title }}</option>
-                </select>
-              </dd>
+                  {{ statusColumns.find((c) => c.key === selectedTask?.status)?.title }}
+                </span>
+                <span class="task-pill" :class="priorityClass(selectedTask.priority)">
+                  {{ selectedTask.priority === 'high' ? 'Высокий приоритет' : selectedTask.priority === 'medium' ? 'Средний' : 'Низкий' }}
+                </span>
+              </div>
+              <h2 id="task-detail-title" class="task-detail-title">
+                <template v-if="isEditingDetail">
+                  <input
+                    v-model="form.title"
+                    type="text"
+                    class="task-detail-title-input"
+                    placeholder="Название задачи"
+                  />
+                </template>
+                <template v-else>
+                  {{ selectedTask.title }}
+                </template>
+              </h2>
+              <dl class="task-detail-list">
+                <div class="task-detail-item">
+                  <dt class="task-detail-label">Номер задачи</dt>
+                  <dd class="task-detail-value">№ {{ getTaskNumber(selectedTask.id) || '—' }}</dd>
+                </div>
+                <div class="task-detail-item">
+                  <dt class="task-detail-label">Исполнитель</dt>
+                  <dd class="task-detail-value">
+                    <template v-if="isEditingDetail">
+                      <div class="task-form-select-wrap task-detail-select-wrap">
+                        <span class="task-detail-avatar">
+                          {{ (assignees.find(a => a.id === form.assigneeId) ?? assignees[0])?.initials ?? '—' }}
+                        </span>
+                        <select v-model="form.assigneeId" class="task-form-select">
+                          <option v-for="a in assignees" :key="a.id" :value="a.id">
+                            {{ a.name }}
+                          </option>
+                        </select>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <span class="task-detail-avatar">{{ selectedTask.assignee.initials }}</span>
+                      {{ selectedTask.assignee.name }}
+                    </template>
+                  </dd>
+                </div>
+                <div class="task-detail-item">
+                  <dt class="task-detail-label">Статус</dt>
+                  <dd class="task-detail-value">
+                    <select
+                      :value="selectedTask.status"
+                      class="task-detail-status-select"
+                      @change="(e) => selectedTask && updateTaskStatus(selectedTask.id, (e.target as HTMLSelectElement).value as Status)"
+                    >
+                      <option v-for="col in statusColumns" :key="col.key" :value="col.key">
+                        {{ col.title }}
+                      </option>
+                    </select>
+                  </dd>
+                </div>
+                <div class="task-detail-item">
+                  <dt class="task-detail-label">Срок выполнения</dt>
+                  <dd class="task-detail-value" :class="{ 'task-detail-overdue': selectedTask.description === 'Просрочено' }">
+                    <template v-if="isEditingDetail">
+                      <input
+                        v-model="form.dueDate"
+                        type="text"
+                        class="task-form-input task-form-input--date task-detail-input-inline"
+                        placeholder="ДД.ММ.ГГГГ"
+                      />
+                    </template>
+                    <template v-else>
+                      до {{ selectedTask.dueDate }}
+                      <span v-if="selectedTask.description === 'Просрочено'" class="task-overdue"> (Просрочено)</span>
+                    </template>
+                  </dd>
+                </div>
+                <div class="task-detail-item">
+                  <dt class="task-detail-label">Тип работ</dt>
+                  <dd class="task-detail-value">
+                    <template v-if="isEditingDetail">
+                      <select v-model="form.workType" class="task-form-select task-detail-input-inline">
+                        <option value="">Не указано</option>
+                        <option v-for="w in workTypes" :key="w" :value="w">
+                          {{ w }}
+                        </option>
+                      </select>
+                    </template>
+                    <template v-else>
+                      {{ selectedTask.workType || 'Не указано' }}
+                    </template>
+                  </dd>
+                </div>
+                <div class="task-detail-item">
+                  <dt class="task-detail-label">Локация</dt>
+                  <dd>
+                    <template v-if="isEditingDetail">
+                      <select v-model="form.field" class="task-form-select task-detail-input-inline">
+                        <option value="">Не выбрано</option>
+                        <option v-for="f in fields" :key="f" :value="f">
+                          {{ f }}
+                        </option>
+                      </select>
+                    </template>
+                    <template v-else>
+                      <span class="task-pill task-pill-field">{{ selectedTask.field }}</span>
+                    </template>
+                  </dd>
+                </div>
+              </dl>
+              <div class="task-detail-desc-wrap">
+                <span class="task-detail-label">Описание задачи</span>
+                <template v-if="isEditingDetail">
+                  <textarea
+                    v-model="form.description"
+                    class="task-form-textarea"
+                    rows="3"
+                    placeholder="Добавьте подробности для исполнителя..."
+                  ></textarea>
+                </template>
+                <template v-else>
+                  <div class="task-detail-desc">
+                    {{ selectedTask.description || 'Описание не указано' }}
+                  </div>
+                </template>
+              </div>
             </div>
-            <div class="task-detail-item">
-              <dt class="task-detail-label">Срок выполнения</dt>
-              <dd class="task-detail-value" :class="{ 'task-detail-overdue': selectedTask.description === 'Просрочено' }">
-                до {{ selectedTask.dueDate }}
-                <span v-if="selectedTask.description === 'Просрочено'" class="task-overdue"> (Просрочено)</span>
-              </dd>
-            </div>
-            <div class="task-detail-item">
-              <dt class="task-detail-label">Локация</dt>
-              <dd><span class="task-pill task-pill-field">{{ selectedTask.field }}</span></dd>
-            </div>
-          </dl>
-          <div v-if="selectedTask.description" class="task-detail-desc-wrap">
-            <span class="task-detail-label">Описание задачи</span>
-            <div class="task-detail-desc">{{ selectedTask.description }}</div>
+            <aside class="task-detail-sidebar">
+              <section class="task-detail-card">
+                <h3 class="task-detail-card-title">Информация о задаче</h3>
+                <div class="task-detail-info-row">
+                  <div class="task-detail-info-avatar">
+                    <span>{{ profileInitials(selectedTask.createdBy?.id ?? null) }}</span>
+                  </div>
+                  <div class="task-detail-info-main">
+                    <div class="task-detail-info-name">{{ selectedTaskCreatorName }}</div>
+                    <div class="task-detail-info-role">Автор задачи</div>
+                  </div>
+                </div>
+                <div class="task-detail-info-meta">
+                  <div class="task-detail-info-meta-item">
+                    <span class="task-detail-info-meta-label">Создана</span>
+                    <span class="task-detail-info-meta-value">{{ selectedTaskCreatedAt }}</span>
+                  </div>
+                </div>
+              </section>
+              <section class="task-detail-card task-detail-card--history">
+                <h3 class="task-detail-card-title">История изменений</h3>
+                <div v-if="eventsLoading" class="task-history-loading">Загрузка истории…</div>
+                <ul v-else class="task-history-list">
+                  <li v-if="!taskEvents.length" class="task-history-empty">История пока пуста</li>
+                  <li v-for="event in taskEvents" :key="event.id" class="task-history-item">
+                    <div class="task-history-dot" aria-hidden="true"></div>
+                    <div class="task-history-content">
+                      <div class="task-history-text">
+                        <span class="task-history-author">{{ profileName(event.user_id) }}</span>
+                        <span class="task-history-sep">·</span>
+                        <span class="task-history-event">
+                          <template v-if="event.event_type === 'status_changed'">
+                            Статус:
+                            {{
+                              statusTitle(
+                                (event.payload?.from as Status) || 'todo',
+                              )
+                            }}
+                            →
+                            {{
+                              statusTitle(
+                                (event.payload?.to as Status) || 'todo',
+                              )
+                            }}
+                          </template>
+                          <template v-else-if="event.event_type === 'comment_added'">
+                            Добавлен комментарий
+                          </template>
+                          <template v-else-if="event.event_type === 'created'">
+                            Задача создана
+                          </template>
+                          <template v-else>
+                            {{ event.event_type }}
+                          </template>
+                        </span>
+                      </div>
+                      <div class="task-history-time">
+                        {{ formatDateTime(event.created_at) }}
+                      </div>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+            </aside>
           </div>
+          <section class="task-chat">
+            <h3 class="task-chat-title">Обсуждение задачи</h3>
+            <div v-if="commentsLoading" class="task-chat-loading">Загрузка комментариев…</div>
+            <div v-else class="task-chat-body">
+              <div v-if="!taskComments.length" class="task-chat-empty">
+                Пока нет комментариев. Напишите первый.
+              </div>
+              <ul v-else class="task-chat-list">
+                <li v-for="comment in taskComments" :key="comment.id" class="task-chat-item">
+                  <div class="task-chat-avatar">
+                    {{ profileInitials(comment.user_id) }}
+                  </div>
+                  <div class="task-chat-message">
+                    <div class="task-chat-meta">
+                      <span class="task-chat-author">{{ profileName(comment.user_id) }}</span>
+                      <span class="task-chat-dot">·</span>
+                      <span class="task-chat-time">{{ formatDateTime(comment.created_at) }}</span>
+                    </div>
+                    <div class="task-chat-text">
+                      {{ comment.message }}
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            </div>
+            <form class="task-chat-input-row" @submit.prevent="submitComment">
+              <textarea
+                v-model="newCommentMessage"
+                class="task-chat-input"
+                rows="2"
+                placeholder="Напишите комментарий для исполнителя..."
+              ></textarea>
+              <button type="submit" class="task-chat-send" :class="{ 'task-chat-send--loading': isSendingComment }" :disabled="!newCommentMessage.trim() || isSendingComment">
+                <span v-if="!isSendingComment">Отправить</span>
+                <span v-else class="task-chat-send-spinner" aria-hidden="true"></span>
+              </button>
+            </form>
+          </section>
           <div class="task-detail-actions">
-            <button type="button" class="task-detail-btn task-detail-btn--edit" @click="openEdit">Редактировать</button>
-            <button type="button" class="task-detail-btn task-detail-btn--delete" @click="deleteTask">Удалить</button>
-            <button type="button" class="task-detail-btn task-detail-btn--close" @click="closeTask">Закрыть</button>
+            <template v-if="isEditingDetail">
+              <button type="button" class="task-detail-btn task-detail-btn--edit" @click="cancelDetailEdit">
+                Отмена
+              </button>
+              <button type="button" class="task-detail-btn task-detail-btn--delete" @click="deleteTask">
+                Удалить
+              </button>
+              <button
+                type="button"
+                class="task-detail-btn task-detail-btn--close task-detail-btn--saving"
+                :class="{ 'task-detail-btn--saving-active': isSavingDetail }"
+                @click="saveDetailEdit"
+                :disabled="isSavingDetail"
+              >
+                <span v-if="!isSavingDetail">Сохранить</span>
+                <span v-else class="task-detail-saving-spinner" aria-hidden="true"></span>
+              </button>
+            </template>
+            <template v-else>
+              <button type="button" class="task-detail-btn task-detail-btn--edit" @click="openEdit">
+                Редактировать
+              </button>
+              <button type="button" class="task-detail-btn task-detail-btn--delete" @click="deleteTask">
+                Удалить
+              </button>
+              <button type="button" class="task-detail-btn task-detail-btn--close" @click="closeTask">
+                Закрыть
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -1908,6 +2294,10 @@ function statusClass(s: Status) {
   animation: taskModalIn 0.25s ease;
 }
 
+.task-modal--detail {
+  max-width: 960px;
+}
+
 @keyframes taskModalIn {
   from {
     opacity: 0;
@@ -2298,12 +2688,321 @@ function statusClass(s: Status) {
   background: var(--accent-green-hover);
 }
 
+.task-detail-btn--saving {
+  position: relative;
+  min-width: 120px;
+}
+
+.task-detail-saving-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-top-color: #ffffff;
+  animation: task-loading-spin 0.8s linear infinite;
+  display: inline-block;
+}
+
 /* Detail modal */
 .task-detail-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: var(--space-md);
+}
+
+.task-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1.4fr);
+  gap: var(--space-lg);
+}
+
+.task-detail-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-detail-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.task-detail-card {
+  background: var(--bg-panel);
+  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+}
+
+.task-detail-card-title {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.task-detail-info-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-detail-info-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #5a7c5e;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.task-detail-info-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-detail-info-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.task-detail-info-role {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.task-detail-info-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-detail-info-meta-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.task-detail-info-meta-label {
+  color: var(--text-secondary);
+}
+
+.task-detail-info-meta-value {
+  color: var(--text-primary);
+}
+
+.task-history-loading {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.task-history-empty {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-block: 6px;
+}
+
+.task-history-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  margin-top: 5px;
+}
+
+.task-history-content {
+  flex: 1;
+}
+
+.task-history-text {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.task-history-author {
+  font-weight: 600;
+}
+
+.task-history-sep {
+  margin: 0 4px;
+  color: var(--text-secondary);
+}
+
+.task-history-event {
+  color: var(--text-primary);
+}
+
+.task-history-time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.task-chat {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-color);
+}
+
+.task-chat-title {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.task-chat-loading {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-chat-body {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: var(--space-md);
+}
+
+.task-chat-empty {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.task-chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-chat-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.task-chat-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #5a7c5e;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.task-chat-message {
+  flex: 1;
+}
+
+.task-chat-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.78rem;
+}
+
+.task-chat-author {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.task-chat-dot {
+  color: var(--text-secondary);
+}
+
+.task-chat-time {
+  color: var(--text-secondary);
+}
+
+.task-chat-text {
+  margin-top: 2px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.task-chat-input-row {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.task-chat-input {
+  flex: 1;
+  min-height: 40px;
+  max-height: 120px;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.task-chat-send {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent-green);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 40px;
+}
+
+.task-chat-send:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.task-chat-send--loading {
+  position: relative;
+}
+
+.task-chat-send-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-top-color: #ffffff;
+  animation: task-loading-spin 0.8s linear infinite;
+  display: inline-block;
 }
 
 .task-pill-status {
@@ -2551,6 +3250,16 @@ function statusClass(s: Status) {
 
 [data-theme='dark'] .task-detail-btn--edit:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .task-detail-card {
+  background: rgba(22, 38, 28, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .task-chat-input {
+  background: rgba(22, 38, 28, 0.7);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 @media (max-width: 1200px) {

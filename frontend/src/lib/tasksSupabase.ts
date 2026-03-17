@@ -42,6 +42,25 @@ export type Task = {
   status: TaskStatus
   workType?: string
   description?: string
+  createdAt: string
+  createdBy?: { id: string; name: string } | null
+}
+
+export type TaskCommentRow = {
+  id: string
+  task_id: string
+  user_id: string
+  message: string
+  created_at: string
+}
+
+export type TaskEventRow = {
+  id: string
+  task_id: string
+  user_id: string | null
+  event_type: string
+  payload: Record<string, unknown> | null
+  created_at: string
 }
 
 function initialsFromName(name: string, email: string): string {
@@ -228,6 +247,8 @@ export function tasksWithAssignees(rows: TaskRow[], profiles: ProfileRow[]): Tas
     const p = profileMap.get(r.assignee_id)
     const name = p ? (p.display_name || p.email) : 'Неизвестный'
     const initials = p ? initialsFromName(p.display_name || '', p.email) : '?'
+    const creatorProfile = r.created_by ? profileMap.get(r.created_by) : undefined
+    const creatorName = creatorProfile ? (creatorProfile.display_name || creatorProfile.email) : null
     return {
       id: r.id,
       number: r.number,
@@ -239,6 +260,8 @@ export function tasksWithAssignees(rows: TaskRow[], profiles: ProfileRow[]): Tas
       status: r.status,
       workType: r.work_type ?? undefined,
       description: r.description ?? undefined,
+      createdAt: r.created_at,
+      createdBy: r.created_by && creatorName ? { id: r.created_by, name: creatorName } : null,
     }
   })
 }
@@ -295,6 +318,65 @@ export async function updateTask(
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
   if (error) throw error
+}
+
+export async function loadTaskComments(taskId: string): Promise<TaskCommentRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('task_comments')
+    .select('id, task_id, user_id, message, created_at')
+    .eq('task_id', taskId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as TaskCommentRow[]
+}
+
+export async function addTaskComment(taskId: string, userId: string, message: string): Promise<TaskCommentRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const trimmed = message.trim()
+  if (!trimmed) throw new Error('Пустой комментарий')
+  const { data, error } = await supabase
+    .from('task_comments')
+    .insert({
+      task_id: taskId,
+      user_id: userId,
+      message: trimmed,
+    })
+    .select('id, task_id, user_id, message, created_at')
+    .single()
+  if (error) throw error
+  return data as TaskCommentRow
+}
+
+export async function loadTaskEvents(taskId: string): Promise<TaskEventRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('task_events')
+    .select('id, task_id, user_id, event_type, payload, created_at')
+    .eq('task_id', taskId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as TaskEventRow[]
+}
+
+export async function addTaskEvent(
+  args: {
+    taskId: string
+    userId: string | null
+    eventType: string
+    payload?: Record<string, unknown> | null
+  },
+): Promise<void> {
+  if (!supabase) return
+  const { error } = await supabase.from('task_events').insert({
+    task_id: args.taskId,
+    user_id: args.userId,
+    event_type: args.eventType,
+    payload: args.payload ?? null,
+  })
+  if (error) {
+    console.warn('Не удалось записать событие задачи', error)
+  }
 }
 
 export async function deleteTask(id: string): Promise<void> {
