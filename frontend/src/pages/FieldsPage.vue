@@ -275,7 +275,7 @@ const cropFilter = ref<CropKey>('all')
 const searchText = ref('')
 const selectedFieldId = ref<string | null>(null)
 const multiSelectedIds = ref<string[]>([])
-const pageSize = 5
+const pageSize = ref(10)
 const currentPage = ref(1)
 
 const selectedField = computed(() => fields.value.find((f) => f.id === selectedFieldId.value) ?? null)
@@ -300,10 +300,10 @@ const nextFieldNumber = computed(() => {
 })
 
 const totalFiltered = computed(() => filteredFields.value.length)
-const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize)))
+const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 const paginatedFields = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return filteredFields.value.slice(start, start + pageSize)
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredFields.value.slice(start, start + pageSize.value)
 })
 
 const totalSelectedArea = computed(() =>
@@ -720,12 +720,18 @@ async function deleteField(id: string) {
     selectedFieldId.value = fields.value[0]?.id ?? null
   }
   const total = totalFiltered.value
-  const maxPage = Math.ceil(total / pageSize)
+  const maxPage = Math.ceil(total / pageSize.value)
   if (currentPage.value > maxPage && maxPage > 0) currentPage.value = maxPage
 }
 
 function setPage(p: number) {
   currentPage.value = Math.max(1, Math.min(p, totalPages.value))
+}
+
+function onPageSizeChange() {
+  const total = totalFiltered.value
+  const maxPage = Math.ceil(total / pageSize.value)
+  if (currentPage.value > maxPage && maxPage > 0) currentPage.value = maxPage
 }
 
 function fieldNameIconClass(f: Field): string {
@@ -1183,10 +1189,28 @@ onMounted(async () => {
           </table>
         </div>
 
-        <div class="fields-pagination">
-          <p class="fields-pagination-info">
-            Показано от <span class="fields-pagination-num">{{ totalFiltered ? (currentPage - 1) * pageSize + 1 : 0 }}</span> до <span class="fields-pagination-num">{{ totalFiltered ? Math.min(currentPage * pageSize, totalFiltered) : 0 }}</span> из <span class="fields-pagination-num">{{ totalFiltered }}</span> полей
-          </p>
+      </div>
+      </div>
+
+      <div
+        v-show="activeTab === 'fields' && totalFiltered > 0"
+        class="fields-pagination"
+      >
+        <p class="fields-pagination-info">
+          Показано
+          <span class="fields-pagination-num">
+            {{ totalFiltered ? (currentPage - 1) * pageSize + 1 : 0 }}
+          </span>
+          –
+          <span class="fields-pagination-num">
+            {{ totalFiltered ? Math.min(currentPage * pageSize, totalFiltered) : 0 }}
+          </span>
+          из
+          <span class="fields-pagination-num">
+            {{ totalFiltered }}
+          </span>
+        </p>
+        <div class="fields-pagination-right">
           <nav class="fields-pagination-nav" aria-label="Пагинация">
             <button
               type="button"
@@ -1195,7 +1219,7 @@ onMounted(async () => {
               aria-label="Предыдущая страница"
               @click="setPage(currentPage - 1)"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+              &lt;
             </button>
             <template v-for="(p, i) in paginationPages" :key="p === '...' ? `ellipsis-${i}` : p">
               <button
@@ -1216,11 +1240,23 @@ onMounted(async () => {
               aria-label="Следующая страница"
               @click="setPage(currentPage + 1)"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+              &gt;
             </button>
           </nav>
+          <label class="fields-pagination-size">
+            <span class="fields-pagination-size-label">На странице</span>
+            <select
+              v-model.number="pageSize"
+              class="fields-pagination-select"
+              @change="onPageSizeChange"
+            >
+              <option :value="5">5</option>
+              <option :value="10">10</option>
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+            </select>
+          </label>
         </div>
-      </div>
       </div>
 
       <div v-show="activeTab === 'downtime-reasons'" class="fields-tab-panel">
@@ -2188,25 +2224,30 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-md) 24px;
+  margin-top: var(--space-md);
+  padding: var(--space-md) var(--space-lg) 0;
   border-top: 1px solid var(--border-color);
-  background: var(--bg-panel);
+  min-height: 40px;
 }
 .fields-pagination-info {
   font-size: 0.875rem;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   margin: 0;
 }
 .fields-pagination-num {
   font-weight: 500;
 }
 .fields-pagination-nav {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 0;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  gap: 4px;
+}
+
+.fields-pagination-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
 }
 .fields-page-btn {
   display: inline-flex;
@@ -2214,9 +2255,10 @@ onMounted(async () => {
   justify-content: center;
   min-width: 36px;
   height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-panel);
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-primary);
   font-size: 0.875rem;
   font-weight: 500;
@@ -2228,25 +2270,45 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 .fields-page-btn--edge {
-  padding: 0 8px;
+  width: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
 }
 .fields-page-btn--active {
-  background: var(--nav-active-bg);
-  border-color: var(--accent-green);
-  color: var(--accent-green);
-  z-index: 1;
+  background: rgba(76, 175, 80, 0.15);
+  border-color: rgba(76, 175, 80, 0.5);
+  color: var(--text-primary);
 }
 .fields-page-ellipsis {
+  padding: 0 10px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.fields-pagination-size {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 36px;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.fields-pagination-size-label {
+  white-space: nowrap;
+}
+
+.fields-pagination-select {
   height: 36px;
-  padding: 0 8px;
+  min-width: 72px;
+  padding: 0 28px 0 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
   color: var(--text-primary);
   font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
 }
 
 /* Кнопки действий — в один ряд, один размер */
