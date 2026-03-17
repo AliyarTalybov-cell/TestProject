@@ -17,6 +17,7 @@ export type ProfileRow = {
 
 export type TaskRow = {
   id: string
+  number: number
   assignee_id: string
   created_by: string | null
   title: string
@@ -32,6 +33,7 @@ export type TaskRow = {
 
 export type Task = {
   id: string
+  number: number
   title: string
   assignee: { id: string; name: string; initials: string }
   priority: TaskPriority
@@ -163,7 +165,7 @@ export async function loadTasksFromSupabase(
   if (!supabase) return []
   let q = supabase
     .from('tasks')
-    .select('id, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
+    .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
     .order('created_at', { ascending: false })
   if (onlyMine) q = q.eq('assignee_id', userId)
   const { data, error } = await q
@@ -186,7 +188,7 @@ export async function loadTasksFiltered(
   if (!supabase) return []
   let q = supabase
     .from('tasks')
-    .select('id, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
+    .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at')
     .order('created_at', { ascending: false })
   if (onlyMine) q = q.eq('assignee_id', userId)
   if (opts.assigneeId) q = q.eq('assignee_id', opts.assigneeId)
@@ -205,6 +207,7 @@ export function tasksWithAssignees(rows: TaskRow[], profiles: ProfileRow[]): Tas
     const initials = p ? initialsFromName(p.display_name || '', p.email) : '?'
     return {
       id: r.id,
+      number: r.number,
       title: r.title,
       assignee: { id: r.assignee_id, name, initials },
       priority: r.priority,

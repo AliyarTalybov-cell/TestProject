@@ -232,20 +232,10 @@ const tasksByStatus = computed(() => {
   return byStatus
 })
 
-/* Номер задачи — стабильная позиция в полном списке (не зависит от фильтра/статуса/страницы) */
-const taskNumbers = computed(() => {
-  const list = tasks.value
-  const map: Record<string, number> = {}
-  list.forEach((t, i) => { map[t.id] = i + 1 })
-  return map
-})
+/* Номер задачи приходит с бэкенда (поле number в таблице tasks) */
 function getTaskNumber(taskId: string): number {
-  const numStr = searchTaskNumber.value.trim()
-  const n = parseInt(numStr, 10)
-  if (numStr && !isNaN(n) && n >= 1 && filteredTasks.value.length === 1 && filteredTasks.value[0].id === taskId) {
-    return n
-  }
-  return taskNumbers.value[taskId] ?? 0
+  const task = tasks.value.find((t) => t.id === taskId) ?? filteredTasks.value.find((t) => t.id === taskId)
+  return task?.number ?? 0
 }
 
 function applyDateFilter() {
