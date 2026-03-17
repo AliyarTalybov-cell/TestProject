@@ -75,6 +75,7 @@ const newCommentMessage = ref('')
 const isEditingDetail = ref(false)
 const isSavingDetail = ref(false)
 const isSendingComment = ref(false)
+const isMetaInitialLoading = ref(false)
 const assignees = computed<AssigneeOption[]>(() => {
   if (!auth.user.value) return []
   const list = profiles.value.map((p) => ({
@@ -398,6 +399,7 @@ async function loadMetaForTask(taskId: string) {
   }
   commentsLoading.value = true
   eventsLoading.value = true
+  isMetaInitialLoading.value = true
   try {
     const [comments, events] = await Promise.all([loadTaskComments(taskId), loadTaskEvents(taskId)])
     taskComments.value = comments
@@ -408,6 +410,7 @@ async function loadMetaForTask(taskId: string) {
   } finally {
     commentsLoading.value = false
     eventsLoading.value = false
+    isMetaInitialLoading.value = false
   }
 }
 
@@ -1040,60 +1043,64 @@ function statusClass(s: Status) {
                 <template v-else>{{ task.dueDate }}</template>
               </td>
               <td>
-                <span class="task-status-dot" :class="statusClass(task.status)" aria-hidden="true"></span>
-                {{ statusColumns.find((c) => c.key === task.status)?.title }}
+                <span
+                  class="task-pill task-pill-status"
+                  :class="statusClass(task.status)"
+                >
+                  {{ statusColumns.find((c) => c.key === task.status)?.title }}
+                </span>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <div v-if="totalFiltered > 0" class="task-pagination">
-        <span class="task-pagination-info">
-          Показано {{ paginationStart }}–{{ paginationEnd }} из {{ totalFiltered }}
-        </span>
-        <div class="task-pagination-right">
-          <div class="task-pagination-nav">
+    </div>
+    <div v-show="viewMode === 'list' && !tasksLoading && totalFiltered > 0" class="task-pagination">
+      <span class="task-pagination-info">
+        Показано {{ paginationStart }}–{{ paginationEnd }} из {{ totalFiltered }}
+      </span>
+      <div class="task-pagination-right">
+        <div class="task-pagination-nav">
+          <button
+            type="button"
+            class="task-pagination-arrow"
+            :disabled="currentPage <= 1"
+            aria-label="Предыдущая страница"
+            @click="currentPage = currentPage - 1"
+          >
+            &lt;
+          </button>
+          <template v-for="(p, i) in pageNumbers" :key="p === 'ellipsis' ? `e-${i}` : p">
             <button
+              v-if="p !== 'ellipsis'"
               type="button"
-              class="task-pagination-arrow"
-              :disabled="currentPage <= 1"
-              aria-label="Предыдущая страница"
-              @click="currentPage = currentPage - 1"
+              class="task-pagination-num"
+              :class="{ 'task-pagination-num--active': p === currentPage }"
+              @click="goToPage(p)"
             >
-              &lt;
+              {{ p }}
             </button>
-            <template v-for="(p, i) in pageNumbers" :key="p === 'ellipsis' ? `e-${i}` : p">
-              <button
-                v-if="p !== 'ellipsis'"
-                type="button"
-                class="task-pagination-num"
-                :class="{ 'task-pagination-num--active': p === currentPage }"
-                @click="goToPage(p)"
-              >
-                {{ p }}
-              </button>
-              <span v-else class="task-pagination-ellipsis">…</span>
-            </template>
-            <button
-              type="button"
-              class="task-pagination-arrow"
-              :disabled="currentPage >= totalPages"
-              aria-label="Следующая страница"
-              @click="currentPage = currentPage + 1"
-            >
-              &gt;
-            </button>
-          </div>
-          <label class="task-pagination-size">
-            <span class="task-filter-select-label">На странице</span>
-            <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
-              <option :value="5">5</option>
-              <option :value="10">10</option>
-              <option :value="20">20</option>
-              <option :value="50">50</option>
-            </select>
-          </label>
+            <span v-else class="task-pagination-ellipsis">…</span>
+          </template>
+          <button
+            type="button"
+            class="task-pagination-arrow"
+            :disabled="currentPage >= totalPages"
+            aria-label="Следующая страница"
+            @click="currentPage = currentPage + 1"
+          >
+            &gt;
+          </button>
         </div>
+        <label class="task-pagination-size">
+          <span class="task-filter-select-label">На странице</span>
+          <select v-model.number="pageSize" class="task-filter-select task-pagination-select">
+            <option :value="5">5</option>
+            <option :value="10">10</option>
+            <option :value="20">20</option>
+            <option :value="50">50</option>
+          </select>
+        </label>
       </div>
     </div>
 
@@ -1217,6 +1224,9 @@ function statusClass(s: Status) {
         <div class="task-modal task-modal--detail" role="dialog" aria-labelledby="task-detail-title">
           <button type="button" class="task-modal-close" aria-label="Закрыть" @click="closeTask">×</button>
           <div class="task-detail-layout">
+            <div v-if="isMetaInitialLoading" class="task-detail-loading-overlay" aria-hidden="true">
+              <div class="task-detail-loading-spinner"></div>
+            </div>
             <div class="task-detail-main">
               <div class="task-detail-badges">
                 <span
@@ -1827,7 +1837,7 @@ function statusClass(s: Status) {
   justify-content: space-between;
   gap: var(--space-md);
   margin-top: var(--space-md);
-  padding-top: var(--space-md);
+  padding: var(--space-md) var(--space-lg) 0;
   border-top: 1px solid var(--border-color);
   min-height: 40px;
 }
@@ -2316,7 +2326,7 @@ function statusClass(s: Status) {
   width: 32px;
   height: 32px;
   border: none;
-  background: transparent;
+  background: rgba(0, 0, 0, 0.04);
   color: var(--text-secondary);
   font-size: 1.5rem;
   line-height: 1;
@@ -2326,7 +2336,7 @@ function statusClass(s: Status) {
 }
 
 .task-modal-close:hover {
-  background: var(--chip-bg);
+  background: rgba(0, 0, 0, 0.08);
   color: var(--text-primary);
 }
 
@@ -2715,11 +2725,32 @@ function statusClass(s: Status) {
   display: grid;
   grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1.4fr);
   gap: var(--space-lg);
+  position: relative;
 }
 
 .task-detail-main {
   display: flex;
   flex-direction: column;
+}
+
+.task-detail-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.02);
+  backdrop-filter: blur(1px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.task-detail-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-green);
+  animation: task-loading-spin 0.8s linear infinite;
 }
 
 .task-detail-sidebar {
