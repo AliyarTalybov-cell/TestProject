@@ -5,6 +5,7 @@ import {
   getFieldById,
   loadFieldPhotos,
   addFieldPhoto,
+  deleteFieldPhoto,
   updateField,
   uploadFieldScheme,
   type FieldRow,
@@ -255,6 +256,29 @@ async function onPhotoFileChange(e: Event) {
   } finally {
     photoUploading.value = false
     input.value = ''
+  }
+}
+
+async function removePhoto(id: string) {
+  if (!props.id || !isSupabaseConfigured()) return
+  if (!confirm('Удалить это фото поля?')) return
+  try {
+    await deleteFieldPhoto(id)
+    photos.value = await loadFieldPhotos(props.id)
+  } catch (err) {
+    console.error(err)
+  }
+}
+
+async function removeScheme() {
+  if (!field.value || !isSupabaseConfigured()) return
+  if (!field.value.scheme_file_url) return
+  if (!confirm('Удалить схему поля?')) return
+  try {
+    await updateField(field.value.id, { scheme_file_url: null })
+    await loadData()
+  } catch (err) {
+    console.error(err)
   }
 }
 
@@ -578,6 +602,13 @@ watch(() => props.id, loadData)
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 <span class="field-details-gallery-title">{{ item.title }}</span>
+                <button
+                  type="button"
+                  class="field-details-gallery-delete"
+                  @click.prevent="removeScheme"
+                >
+                  ✕
+                </button>
               </a>
               <div v-else class="field-details-gallery-thumb">
                 <img
@@ -587,6 +618,13 @@ watch(() => props.id, loadData)
                   @error="($event.target as HTMLImageElement).style.visibility = 'hidden'"
                 />
                 <span class="field-details-gallery-title">{{ item.title }}</span>
+                <button
+                  type="button"
+                  class="field-details-gallery-delete"
+                  @click="item.isScheme ? removeScheme() : removePhoto(item.id)"
+                >
+                  ✕
+                </button>
               </div>
             </div>
           </div>
@@ -1100,5 +1138,29 @@ watch(() => props.id, loadData)
   background: none;
   color: inherit;
   padding: 4px 0 0;
+}
+
+.field-details-gallery-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.9);
+  color: #111827;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.35);
+  z-index: 2;
+}
+
+.field-details-gallery-delete:hover {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 </style>

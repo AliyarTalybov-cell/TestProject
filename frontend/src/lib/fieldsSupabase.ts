@@ -23,6 +23,7 @@ export type FieldPhotoRow = {
   id: string
   field_id: string
   file_url: string
+  file_path?: string | null
   title: string | null
   description: string | null
   created_at: string
@@ -183,6 +184,7 @@ export async function addFieldPhoto(
     .insert({
       field_id: fieldId,
       file_url: urlData.publicUrl,
+      file_path: uploadData.path,
       title: title?.trim() || null,
       description: description?.trim() || null,
     })
@@ -190,6 +192,22 @@ export async function addFieldPhoto(
     .single()
   if (error) throw error
   return row as FieldPhotoRow
+}
+
+export async function deleteFieldPhoto(photoId: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { data: row, error: fetchError } = await supabase
+    .from(FIELD_PHOTOS_TABLE)
+    .select('id, file_url, file_path')
+    .eq('id', photoId)
+    .maybeSingle()
+  if (fetchError || !row) throw fetchError || new Error('Фото не найдено')
+  const storagePath = (row as { file_path?: string | null }).file_path ?? null
+  const { error: delError } = await supabase.from(FIELD_PHOTOS_TABLE).delete().eq('id', photoId)
+  if (delError) throw delError
+  if (storagePath) {
+    await supabase.storage.from(STORAGE_BUCKET).remove([storagePath])
+  }
 }
 
 export { isSupabaseConfigured }
