@@ -138,10 +138,10 @@ watch(mobileMenuOpen, (open) => {
       </nav>
 
       <footer class="sidebar-footer">
-        <div class="sidebar-status">
+        <button type="button" class="sidebar-logout-btn" @click="handleLogout">
           <span class="sidebar-status-dot" aria-hidden="true"></span>
-          <span>Система онлайн</span>
-        </div>
+          <span>Выйти</span>
+        </button>
       </footer>
     </aside>
 
@@ -163,7 +163,6 @@ watch(mobileMenuOpen, (open) => {
                 <span class="topbar-user-name">{{ userDisplay }}</span>
               </div>
             </RouterLink>
-            <button type="button" class="topbar-logout" @click="handleLogout">Выйти</button>
           </div>
         </div>
       </header>
