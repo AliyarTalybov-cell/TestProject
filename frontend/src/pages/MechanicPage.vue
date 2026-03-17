@@ -1742,6 +1742,111 @@ function addField() {
   }
 }
 
+@media (max-width: 768px) {
+  .mechanic-shell {
+    padding: var(--space-md);
+    gap: var(--space-lg);
+  }
+
+  .mechanic-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .mechanic-task-block {
+    padding: var(--space-md);
+  }
+
+  .mechanic-task-title {
+    font-size: 1.1rem;
+  }
+
+  .mechanic-task-actions {
+    flex-direction: column;
+  }
+
+  .btn-operation {
+    width: 100%;
+    text-align: center;
+  }
+
+  .mechanic-today-tasks {
+    padding: var(--space-md);
+  }
+
+  .mechanic-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .mechanic-fields-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mechanic-fields-chips {
+    gap: 8px;
+  }
+
+  .field-chip {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 480px) {
+  .mechanic-shell {
+    padding: var(--space-md) var(--space-sm);
+  }
+
+  .mechanic-task-block {
+    padding: var(--space-md);
+  }
+
+  .mechanic-task-timer {
+    font-size: 1.3rem;
+  }
+
+  .mechanic-task-title {
+    font-size: 1rem;
+  }
+
+  .mechanic-today-task {
+    flex-wrap: wrap;
+  }
+
+  .mechanic-today-task-time {
+    min-width: 56px;
+  }
+
+  .mechanic-card {
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .mechanic-fields-chips {
+    flex-direction: column;
+  }
+
+  .field-chip {
+    border-radius: 10px;
+  }
+
+  .modal {
+    width: min(100vw - 32px, 360px);
+    padding: var(--space-md);
+  }
+
+  .modal-actions {
+    flex-direction: column;
+  }
+
+  .modal-btn,
+  .modal-btn-ghost {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 @media (min-width: 768px) {
   .mechanic-shell {
     padding-inline: var(--space-xl);

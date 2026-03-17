@@ -1342,6 +1342,17 @@ tbody tr:hover td {
   .reports-header-meta {
     flex-direction: column;
     align-items: flex-start;
+    gap: var(--space-md);
+  }
+
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-sm);
+  }
+
+  .summary-layout {
+    grid-template-columns: 1fr;
   }
 }
 </style>

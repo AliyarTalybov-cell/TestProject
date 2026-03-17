@@ -3408,6 +3408,27 @@ function statusClass(s: Status) {
     justify-content: center;
   }
 
+  .task-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .task-detail-sidebar {
+    margin-top: var(--space-md);
+  }
+
+  .task-chat {
+    margin-top: var(--space-md);
+  }
+
+  .task-detail-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .task-detail-actions .task-detail-btn {
+    width: 100%;
+  }
+
   .task-pagination {
     flex-direction: column;
     align-items: stretch;
