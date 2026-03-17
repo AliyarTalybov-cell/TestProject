@@ -218,7 +218,7 @@ function exportToExcel() {
     conditionLabel(r.condition),
     (r.notes ?? '').replace(/\r?\n/g, ' '),
   ])
-  const line = (arr: string[]) => arr.map(escapeCsvCell).join(CSV_SEP)
+  const line = (arr: (string | number)[]) => arr.map((v) => escapeCsvCell(String(v))).join(CSV_SEP)
   const csv = '\uFEFF' + [line(headers), ...rows.map((r) => line(r))].join('\r\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)

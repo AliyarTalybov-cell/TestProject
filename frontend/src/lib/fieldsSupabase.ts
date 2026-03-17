@@ -1,0 +1,195 @@
+import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+
+export type FieldRow = {
+  id: string
+  number: number
+  name: string
+  area: number
+  cadastral_number: string | null
+  address: string | null
+  location_description: string | null
+  extra_info: string | null
+  geolocation: string | null
+  land_type: string
+  sowing_year: number | null
+  responsible_id: string | null
+  crop_key: string
+  scheme_file_url: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type FieldPhotoRow = {
+  id: string
+  field_id: string
+  file_url: string
+  title: string | null
+  description: string | null
+  created_at: string
+}
+
+const FIELDS_TABLE = 'fields'
+const FIELD_PHOTOS_TABLE = 'field_photos'
+const STORAGE_BUCKET = 'field-schemes'
+
+export async function loadFields(): Promise<FieldRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(FIELDS_TABLE)
+    .select(
+      'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at',
+    )
+    .order('number', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as FieldRow[]
+}
+
+export async function getFieldById(id: string): Promise<FieldRow | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from(FIELDS_TABLE)
+    .select(
+      'id, number, name, area, cadastral_number, address, location_description, extra_info, geolocation, land_type, sowing_year, responsible_id, crop_key, scheme_file_url, created_at, updated_at',
+    )
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw error
+  return data as FieldRow | null
+}
+
+export async function addField(payload: {
+  number: number
+  name: string
+  area: number
+  cadastral_number?: string | null
+  address?: string | null
+  location_description?: string | null
+  extra_info?: string | null
+  geolocation?: string | null
+  land_type: string
+  sowing_year?: number | null
+  responsible_id?: string | null
+  crop_key: string
+  scheme_file_url?: string | null
+}): Promise<FieldRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const now = new Date().toISOString()
+  const { data, error } = await supabase
+    .from(FIELDS_TABLE)
+    .insert({
+      number: payload.number,
+      name: payload.name.trim(),
+      area: Number(payload.area),
+      cadastral_number: payload.cadastral_number?.trim() || null,
+      address: payload.address?.trim() || null,
+      location_description: payload.location_description?.trim() || null,
+      extra_info: payload.extra_info?.trim() || null,
+      geolocation: payload.geolocation?.trim() || null,
+      land_type: payload.land_type,
+      sowing_year: payload.sowing_year ?? null,
+      responsible_id: payload.responsible_id || null,
+      crop_key: payload.crop_key,
+      scheme_file_url: payload.scheme_file_url || null,
+      updated_at: now,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return data as FieldRow
+}
+
+export async function updateField(
+  id: string,
+  payload: Partial<{
+    name: string
+    area: number
+    cadastral_number: string | null
+    address: string | null
+    location_description: string | null
+    extra_info: string | null
+    geolocation: string | null
+    land_type: string
+    sowing_year: number | null
+    responsible_id: string | null
+    crop_key: string
+    scheme_file_url: string | null
+  }>,
+): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const updates: Record<string, unknown> = { ...payload, updated_at: new Date().toISOString() }
+  if (payload.name !== undefined) updates.name = payload.name.trim()
+  if (payload.area !== undefined) updates.area = Number(payload.area)
+  if (payload.cadastral_number !== undefined) updates.cadastral_number = payload.cadastral_number?.trim() || null
+  if (payload.address !== undefined) updates.address = payload.address?.trim() || null
+  if (payload.location_description !== undefined) updates.location_description = payload.location_description?.trim() || null
+  if (payload.extra_info !== undefined) updates.extra_info = payload.extra_info?.trim() || null
+  if (payload.geolocation !== undefined) updates.geolocation = payload.geolocation?.trim() || null
+  if (payload.sowing_year !== undefined) updates.sowing_year = payload.sowing_year ?? null
+  if (payload.responsible_id !== undefined) updates.responsible_id = payload.responsible_id || null
+  if (payload.scheme_file_url !== undefined) updates.scheme_file_url = payload.scheme_file_url || null
+  const { error } = await supabase.from(FIELDS_TABLE).update(updates).eq('id', id)
+  if (error) throw error
+}
+
+/** Загружает файл схемы в Storage и возвращает публичный URL. Бакет "field-schemes" должен быть создан в Dashboard и быть публичным. */
+export async function uploadFieldScheme(file: File, fieldId?: string): Promise<string> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const ext = file.name.split('.').pop()?.toLowerCase() || 'bin'
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
+  const path = fieldId ? `${fieldId}/${Date.now()}-${safeName}` : `temp/${Date.now()}-${safeName}`
+  const { data, error } = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, {
+    cacheControl: '3600',
+    upsert: true,
+  })
+  if (error) throw error
+  const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(data.path)
+  return urlData.publicUrl
+}
+
+export async function deleteField(id: string): Promise<void> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const { error } = await supabase.from(FIELDS_TABLE).delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function loadFieldPhotos(fieldId: string): Promise<FieldPhotoRow[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from(FIELD_PHOTOS_TABLE)
+    .select('id, field_id, file_url, title, description, created_at')
+    .eq('field_id', fieldId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as FieldPhotoRow[]
+}
+
+export async function addFieldPhoto(
+  fieldId: string,
+  file: File,
+  title?: string,
+  description?: string,
+): Promise<FieldPhotoRow> {
+  if (!supabase) throw new Error('Supabase не настроен')
+  const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
+  const path = `field-photos/${fieldId}/${Date.now()}-${safeName}`
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(path, file, { cacheControl: '3600', upsert: true })
+  if (uploadError) throw uploadError
+  const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(uploadData.path)
+  const { data: row, error } = await supabase
+    .from(FIELD_PHOTOS_TABLE)
+    .insert({
+      field_id: fieldId,
+      file_url: urlData.publicUrl,
+      title: title?.trim() || null,
+      description: description?.trim() || null,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return row as FieldPhotoRow
+}
+
+export { isSupabaseConfigured }

@@ -11,6 +11,7 @@ export type StoredDowntime = {
   fieldId?: string
   fieldName?: string
   operation?: string
+  notes?: string
 }
 
 export type ActiveDowntime = {
