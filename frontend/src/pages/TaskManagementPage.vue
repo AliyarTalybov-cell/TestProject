@@ -14,6 +14,8 @@ import {
   updateTask as updateTaskApi,
   deleteTask as deleteTaskApi,
 } from '@/lib/tasksSupabase'
+import { loadFields as loadFieldsApi } from '@/lib/fieldsSupabase'
+import { loadWorkOperations, type WorkOperationRow } from '@/lib/reasonsAndOperations'
 import type { Task as TaskType, ProfileRow } from '@/lib/tasksSupabase'
 
 type ViewMode = 'kanban' | 'list'
@@ -99,8 +101,14 @@ async function loadData() {
   tasksLoading.value = true
   try {
     const user = auth.user.value
-    const profileList = await loadProfiles()
+    const [profileList, fieldRows, workOps] = await Promise.all([
+      loadProfiles(),
+      loadFieldsApi(),
+      loadWorkOperations(),
+    ])
     profiles.value = profileList
+    fields.value = fieldRows.map((f) => f.name).sort((a, b) => a.localeCompare(b, 'ru-RU'))
+    workTypes.value = workOps.map((op: WorkOperationRow) => op.name)
     const onlyMine = auth.userRole.value === 'worker'
     const rows = await loadTasksFiltered(onlyMine, user.id, {
       status: filterStatus.value || undefined,
@@ -114,12 +122,8 @@ async function loadData() {
   }
 }
 
-const fields = [
-  'Поле 1', 'Поле 2', 'Поле 3', 'Поле 5', 'Поле 12', 'Поле 15', 'Участок 3',
-  'База', 'Гараж', 'Склад', 'Офис', 'Все поля', 'Южный сектор', 'Северный сектор',
-]
-
-const workTypes = ['Опрыскивание', 'Осмотр', 'Техника', 'Документы', 'Обслуживание', 'Посев', 'Уборка']
+const fields = ref<string[]>([])
+const workTypes = ref<string[]>([])
 
 const filters: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'Все задачи' },
@@ -139,10 +143,10 @@ onActivated(loadData)
 const form = ref({
   title: '',
   assigneeId: '',
-  field: fields[0],
+  field: '',
   priority: 'medium' as Priority,
   dueDate: '',
-  workType: workTypes[0],
+  workType: '',
   description: '',
 })
 
@@ -348,10 +352,10 @@ function openCreate() {
   form.value = {
     title: '',
     assigneeId: defaultAssigneeId,
-    field: fields[0],
+    field: fields.value[0] || '',
     priority: 'medium',
     dueDate: d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '.'),
-    workType: workTypes[0],
+    workType: workTypes.value[0] || '',
     description: '',
   }
   showCreateModal.value = true
@@ -367,7 +371,7 @@ function openEdit() {
     field: task.field,
     priority: task.priority,
     dueDate: task.dueDate === '—' ? '' : task.dueDate,
-    workType: task.workType ?? workTypes[0],
+    workType: task.workType ?? (workTypes.value[0] || ''),
     description: task.description ?? '',
   }
   editingTaskId.value = task.id
@@ -997,6 +1001,7 @@ function statusClass(s: Status) {
               <div class="task-form-field">
                 <label class="task-form-label">Объект / поле</label>
                 <select v-model="form.field" class="task-form-select">
+                  <option value="">Не выбрано</option>
                   <option v-for="f in fields" :key="f" :value="f">{{ f }}</option>
                 </select>
               </div>
@@ -1017,6 +1022,7 @@ function statusClass(s: Status) {
               <div class="task-form-field">
                 <label class="task-form-label">Тип работ</label>
                 <select v-model="form.workType" class="task-form-select">
+                  <option value="">Не указано</option>
                   <option v-for="w in workTypes" :key="w" :value="w">{{ w }}</option>
                 </select>
               </div>
