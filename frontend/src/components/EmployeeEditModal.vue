@@ -63,9 +63,18 @@ async function save() {
   message.value = null
   busy.value = true
   try {
+    const emailPrefix = props.employee.email.split('@')[0] || ''
+    const trimmedFullName = form.value.fullName.trim()
+    const resolvedFullName =
+      trimmedFullName.length >= 2 ? trimmedFullName : emailPrefix.trim()
+
+    if (resolvedFullName.length < 2) {
+      throw new Error('Введите ФИО (минимум 2 символа).')
+    }
+
     await updateEmployee({
       id: props.employee.id,
-      fullName: form.value.fullName.trim(),
+      fullName: resolvedFullName,
       email: form.value.email.trim().toLowerCase(),
       phone: form.value.phone.trim() || null,
       position: form.value.position || null,
@@ -103,7 +112,8 @@ watch(
   () => {
     const e = props.employee
     if (!e) return
-    form.value.fullName = e.display_name || ''
+    const emailPrefix = e.email?.split('@')[0] || ''
+    form.value.fullName = (e.display_name && e.display_name.trim().length >= 2) ? e.display_name : emailPrefix
     form.value.email = e.email || ''
     form.value.phone = e.phone || ''
     form.value.position = e.position || ''
