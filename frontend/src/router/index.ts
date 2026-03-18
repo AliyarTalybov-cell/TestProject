@@ -11,6 +11,7 @@ import MechanicPage from '@/pages/MechanicPage.vue'
 import WeatherPage from '@/pages/WeatherPage.vue'
 import EquipmentPage from '@/pages/EquipmentPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
+import EmployeesPage from '@/pages/EmployeesPage.vue'
 import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
@@ -27,6 +28,7 @@ export const routes = [
   { path: '/mechanic', name: 'mechanic', component: MechanicPage, meta: { title: 'Экран оператора' } },
   { path: '/reports', name: 'reports', component: ReportsPage, meta: { title: 'Аналитика' } },
   { path: '/profile', name: 'profile', component: ProfilePage, meta: { title: 'Настройки профиля' } },
+  { path: '/employees', name: 'employees', component: EmployeesPage, meta: { title: 'Сотрудники' } },
 ] as const
 
 export const router = createRouter({
@@ -44,6 +46,10 @@ router.beforeEach(async (to) => {
   const user = getAuthUser()
   if (to.meta.public && user) return { name: 'dashboard' }
   if (!to.meta.public && !user) return { name: 'login', query: { redirect: to.fullPath } }
+  if (to.name === 'employees') {
+    const role = (user?.user_metadata as { role?: string } | undefined)?.role
+    if (role !== 'manager') return { name: 'dashboard' }
+  }
   return true
 })
 

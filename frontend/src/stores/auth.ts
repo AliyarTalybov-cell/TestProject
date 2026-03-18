@@ -8,6 +8,12 @@ const loading = ref(true)
 /** Кэш профиля текущего пользователя (ФИО, телефон, должность и т.д.), чтобы не сбрасывать форму при переходах */
 const profileCache = ref<ProfileRow | null>(null)
 
+function isUserActive(u: User | null): boolean {
+  if (!u) return false
+  // By default user is active unless explicitly disabled.
+  return u.user_metadata?.active !== false
+}
+
 export function useAuth() {
   const isLoggedIn = computed(() => Boolean(user.value))
 
@@ -18,7 +24,13 @@ export function useAuth() {
     }
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      user.value = session?.user ?? null
+      const nextUser = session?.user ?? null
+      if (nextUser && !isUserActive(nextUser)) {
+        await supabase.auth.signOut()
+        user.value = null
+      } else {
+        user.value = nextUser
+      }
     } finally {
       loading.value = false
     }
@@ -26,10 +38,15 @@ export function useAuth() {
 
   function startAuthListener() {
     if (!supabase) return
-    supabase.auth.onAuthStateChange((_event, session) => {
+    supabase.auth.onAuthStateChange(async (_event, session) => {
       const nextUser = session?.user ?? null
       if (nextUser?.id !== user.value?.id) {
         profileCache.value = null
+      }
+      if (nextUser && !isUserActive(nextUser)) {
+        await supabase.auth.signOut()
+        user.value = null
+        return
       }
       user.value = nextUser
     })
@@ -39,6 +56,11 @@ export function useAuth() {
     if (!supabase) throw new Error('Supabase не настроен')
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
+    if (data.user && !isUserActive(data.user)) {
+      await supabase.auth.signOut()
+      user.value = null
+      throw new Error('Аккаунт отключён. Обратитесь к администратору.')
+    }
     user.value = data.user
     return data
   }
