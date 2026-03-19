@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { ActiveDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
 import { appendEvent, loadActive, saveActive } from '@/lib/downtimeStorage'
@@ -15,6 +15,7 @@ import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
 import { useAuth } from '@/stores/auth'
 import { loadCalendarTasks, updateCalendarTask, type CalendarTaskRow } from '@/lib/calendarTasksSupabase'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
+import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
   { label: 'Поломка техники', description: 'Неисправность, требующая остановки работы', category: 'breakdown' },
@@ -65,12 +66,46 @@ type MechanicField = {
 }
 
 const active = ref<ActiveDowntime | null>(loadActive())
+const activeOperation = ref(loadActiveOperation())
 const isReasonsOpen = ref(false)
 const isOperationsOpen = ref(false)
 const isStartedModalOpen = ref(false)
 const isFinishedModalOpen = ref(false)
 const isFinishedModalType = ref<'downtime' | 'operation'>('downtime')
 const isAddFieldOpen = ref(false)
+
+// --- Модалки старта операции с привязкой техники ---
+const isEquipmentChoiceOpen = ref(false) // Будет ли использована техника?
+const isEquipmentModalOpen = ref(false) // Выбор техники + параметры
+const pendingStartOperation = ref<{ fieldId?: string; fieldName?: string; operation?: string } | null>(null)
+
+type EquipmentConditionBucket = 'good' | 'acceptable' | 'partial' | 'bad'
+
+const equipmentList = ref<EquipmentRow[]>([])
+const equipmentLoading = ref(false)
+const equipmentError = ref<string | null>(null)
+const selectedEquipmentId = ref<string>('')
+
+const fuelPercent = ref<number>(70)
+const conditionPercent = ref<number>(80)
+const equipmentRepairNotes = ref<string>('')
+
+const equipmentConditionBucket = computed<EquipmentConditionBucket>(() => {
+  if (conditionPercent.value >= 75) return 'good'
+  if (conditionPercent.value >= 50) return 'acceptable'
+  if (conditionPercent.value >= 25) return 'partial'
+  return 'bad'
+})
+
+const equipmentConditionLabel = computed(() => {
+  const b = equipmentConditionBucket.value
+  if (b === 'good') return 'Хорошее состояние'
+  if (b === 'acceptable') return 'Приемлемо'
+  if (b === 'partial') return 'Требуется частичная починка'
+  return 'Плохое состояние'
+})
+
+const equipmentConditionRequiresNotes = computed(() => equipmentConditionBucket.value === 'partial' || equipmentConditionBucket.value === 'bad')
 
 const finishNotesModalOpen = ref(false)
 const finishNotesType = ref<'downtime' | 'operation' | null>(null)
@@ -88,6 +123,7 @@ const workOperationsList = ref<WorkOperationRow[]>([])
 onMounted(async () => {
   const savedOp = loadActiveOperation()
   if (savedOp && !active.value) {
+    activeOperation.value = savedOp
     workStartedAt.value = savedOp.startISO
     if (savedOp.fieldId) currentFieldId.value = savedOp.fieldId
   }
@@ -151,7 +187,7 @@ const statusText = computed(() => {
 
 const circleFieldLabel = computed(() => active.value?.fieldName ?? currentField.value?.name ?? 'Поле не выбрано')
 const circleTaskLabel = computed(
-  () => active.value?.operation ?? currentField.value?.operation ?? 'Операция не указана',
+  () => active.value?.operation ?? activeOperation.value?.operation ?? currentField.value?.operation ?? 'Операция не указана',
 )
 
 const taskTitle = computed(() => `${circleFieldLabel.value} — ${circleTaskLabel.value}`)
@@ -206,6 +242,8 @@ function priorityLabel(priority: string): string {
 
 function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   workStartedAt.value = null
+  activeOperation.value = null
+  saveActiveOperation(null)
   const now = new Date()
   const field = currentField.value
   active.value = {
@@ -284,22 +322,29 @@ function stopOperationWithNotes(notes?: string) {
   const start = new Date(workStartedAt.value)
   const durationMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60000))
   const field = currentField.value
+  const savedOp = activeOperation.value
   const op = {
     id: now.getTime(),
     employee: employeeDisplayName.value,
-    fieldId: field?.id,
-    fieldName: field?.name,
-    operation: field?.operation,
+    fieldId: savedOp?.fieldId ?? field?.id,
+    fieldName: savedOp?.fieldName ?? field?.name,
+    operation: savedOp?.operation ?? field?.operation,
     startISO: workStartedAt.value,
     endISO: now.toISOString(),
     durationMinutes,
     notes,
+    equipmentId: savedOp?.equipmentId ?? null,
+    equipmentFuelPercent: savedOp?.equipmentFuelPercent ?? null,
+    equipmentConditionValue: savedOp?.equipmentConditionValue ?? null,
+    equipmentConditionLabel: savedOp?.equipmentConditionLabel ?? null,
+    equipmentRepairNotes: savedOp?.equipmentRepairNotes ?? null,
   }
   appendOperation(op)
   if (isSupabaseConfigured()) {
     insertOperation(op, auth.user.value?.id ?? null).catch(() => {})
   }
   saveActiveOperation(null)
+  activeOperation.value = null
   workStartedAt.value = null
 }
 
@@ -310,30 +355,138 @@ function setCurrentField(id: string) {
 
 function startOperation(field: MechanicField) {
   setCurrentField(field.id)
-  const startISO = new Date().toISOString()
-  workStartedAt.value = startISO
-  saveActiveOperation({
-    startISO,
+  pendingStartOperation.value = {
     fieldId: field.id,
     fieldName: field.name,
     operation: field.operation,
-    employee: employeeDisplayName.value,
-  })
+  }
   isOperationsOpen.value = false
+  isEquipmentChoiceOpen.value = true
 }
 
 function startOperationByName(op: WorkOperationRow) {
   const field = currentField.value
-  const startISO = new Date().toISOString()
-  workStartedAt.value = startISO
-  saveActiveOperation({
-    startISO,
+  pendingStartOperation.value = {
     fieldId: field?.id,
     fieldName: field?.name,
     operation: op.name,
-    employee: employeeDisplayName.value,
-  })
+  }
   isOperationsOpen.value = false
+  isEquipmentChoiceOpen.value = true
+}
+
+function resetEquipmentForm() {
+  selectedEquipmentId.value = ''
+  fuelPercent.value = 70
+  conditionPercent.value = 80
+  equipmentRepairNotes.value = ''
+  equipmentError.value = null
+  equipmentList.value = []
+}
+
+function conditionFromEquipmentType(c: string | null | undefined): number {
+  // Пробрасываем из типа техники в начальное значение слайдера (примерно).
+  if (c === 'operational') return 85
+  if (c === 'repair') return 45
+  if (c === 'decommissioned') return 10
+  return 80
+}
+
+async function openEquipmentModal() {
+  // Если бекенд не настроен или техник нет — всё равно показываем UI и позволяем заполнить параметры,
+  // но без сохранения equipment_id.
+  resetEquipmentForm()
+  isEquipmentChoiceOpen.value = false
+  isEquipmentModalOpen.value = true
+
+  if (!isSupabaseConfigured()) return
+  equipmentLoading.value = true
+  try {
+    equipmentList.value = await loadEquipment()
+    if (equipmentList.value.length) {
+      selectedEquipmentId.value = equipmentList.value[0].id
+      conditionPercent.value = conditionFromEquipmentType(equipmentList.value[0].condition)
+    }
+  } catch (e) {
+    equipmentError.value = e instanceof Error ? e.message : 'Не удалось загрузить технику'
+  } finally {
+    equipmentLoading.value = false
+  }
+}
+
+watch(selectedEquipmentId, (id) => {
+  if (!id) return
+  const eq = equipmentList.value.find((e) => e.id === id)
+  if (!eq) return
+  conditionPercent.value = conditionFromEquipmentType(eq.condition)
+  // При хорошем/приемлемом состоянии починка не нужна — очищаем текст.
+  if (!(eq.condition === 'repair' || eq.condition === 'decommissioned')) {
+    equipmentRepairNotes.value = ''
+  }
+})
+
+watch(conditionPercent, () => {
+  if (!equipmentConditionRequiresNotes.value) equipmentRepairNotes.value = ''
+})
+
+function startOperationConfirmedWithoutEquipment() {
+  const pending = pendingStartOperation.value
+  if (!pending) return
+  const startISO = new Date().toISOString()
+  workStartedAt.value = startISO
+  activeOperation.value = {
+    startISO,
+    fieldId: pending.fieldId,
+    fieldName: pending.fieldName,
+    operation: pending.operation,
+    employee: employeeDisplayName.value,
+    equipmentId: null,
+    equipmentFuelPercent: null,
+    equipmentConditionValue: null,
+    equipmentConditionLabel: null,
+    equipmentRepairNotes: null,
+  }
+  saveActiveOperation(activeOperation.value)
+  isEquipmentChoiceOpen.value = false
+  pendingStartOperation.value = null
+}
+
+function startOperationConfirmedWithEquipment() {
+  const pending = pendingStartOperation.value
+  if (!pending) return
+  const equipmentId = selectedEquipmentId.value
+  if (!equipmentId) return
+  if (equipmentConditionRequiresNotes.value && !equipmentRepairNotes.value.trim()) return
+
+  const startISO = new Date().toISOString()
+  workStartedAt.value = startISO
+  activeOperation.value = {
+    startISO,
+    fieldId: pending.fieldId,
+    fieldName: pending.fieldName,
+    operation: pending.operation,
+    employee: employeeDisplayName.value,
+    equipmentId,
+    equipmentFuelPercent: Math.round(fuelPercent.value),
+    equipmentConditionValue: Math.round(conditionPercent.value),
+    equipmentConditionLabel: equipmentConditionLabel.value,
+    equipmentRepairNotes: equipmentConditionRequiresNotes.value ? equipmentRepairNotes.value.trim() : null,
+  }
+  saveActiveOperation(activeOperation.value)
+  isEquipmentModalOpen.value = false
+  isEquipmentChoiceOpen.value = false
+  pendingStartOperation.value = null
+}
+
+function closeEquipmentChoiceAndReturnToSheet() {
+  isEquipmentChoiceOpen.value = false
+  pendingStartOperation.value = null
+  isOperationsOpen.value = true
+}
+
+function backFromEquipmentModalToChoice() {
+  isEquipmentModalOpen.value = false
+  isEquipmentChoiceOpen.value = true
 }
 
 
@@ -638,6 +791,116 @@ function addField() {
       </ul>
       <p v-if="!workOperationsList.length && !fields.length" class="sheet-empty">Добавьте операции на странице «Поля» (блок «Справочники») или поля в «Мои поля сегодня».</p>
     </aside>
+
+    <!-- Modal: Будет ли использована техника? -->
+    <div
+      v-if="isEquipmentChoiceOpen"
+      class="modal-backdrop"
+      @click="closeEquipmentChoiceAndReturnToSheet()"
+    >
+      <div class="modal" @click.stop>
+        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-title">Будет ли использована техника?</div>
+        <p class="modal-text modal-text-muted">
+          Если техника нужна — выберите её и укажите параметры (топливо и состояние).
+        </p>
+        <div class="modal-actions modal-actions--two">
+          <button type="button" class="modal-btn-ghost" @click="startOperationConfirmedWithoutEquipment">
+            Нет
+          </button>
+          <button type="button" class="modal-btn" @click="openEquipmentModal">
+            Да
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Выбор техники + топливо/состояние -->
+    <div
+      v-if="isEquipmentModalOpen"
+      class="modal-backdrop"
+      @click="backFromEquipmentModalToChoice()"
+    >
+      <div class="modal" @click.stop>
+        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-title">Техника для операции</div>
+
+        <div v-if="equipmentLoading" class="modal-text">Загрузка техники…</div>
+        <div v-else-if="equipmentError" class="modal-text modal-text-muted">{{ equipmentError }}</div>
+        <div v-else>
+          <div class="modal-form">
+            <label class="modal-field">
+              <span class="modal-label">Техника</span>
+              <select v-model="selectedEquipmentId" class="modal-select">
+                <option value="" disabled>Выберите технику</option>
+                <option v-for="e in equipmentList" :key="e.id" :value="e.id">
+                  {{ e.brand }} — {{ e.license_plate }} ({{ e.model ?? '—' }})
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="equipment-sliders">
+            <div class="equipment-slider-block">
+              <div class="equipment-slider-row">
+                <span class="equipment-slider-label">Топливо</span>
+                <span class="equipment-slider-value">{{ fuelPercent }}%</span>
+              </div>
+              <input
+                v-model.number="fuelPercent"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                class="equipment-range"
+              />
+            </div>
+
+            <div class="equipment-slider-block">
+              <div class="equipment-slider-row">
+                <span class="equipment-slider-label">Состояние техники</span>
+                <span class="equipment-slider-value">{{ conditionPercent }}%</span>
+              </div>
+              <input
+                v-model.number="conditionPercent"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                class="equipment-range"
+              />
+              <div class="equipment-condition-text">{{ equipmentConditionLabel }}</div>
+            </div>
+
+            <div v-if="equipmentConditionRequiresNotes" class="equipment-repair-notes">
+              <label class="modal-field">
+                <span class="modal-label">Что конкретно необходимо исправить</span>
+                <textarea
+                  v-model="equipmentRepairNotes"
+                  class="modal-textarea"
+                  rows="4"
+                  placeholder="Например: заменить ремень, проверить гидравлику, подтянуть крепления…"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-actions modal-actions--two">
+          <button type="button" class="modal-btn-ghost" @click="backFromEquipmentModalToChoice">
+            Назад
+          </button>
+          <button
+            type="button"
+            class="modal-btn"
+            :disabled="!selectedEquipmentId || equipmentLoading || (equipmentConditionRequiresNotes && !equipmentRepairNotes.trim())"
+            @click="startOperationConfirmedWithEquipment"
+          >
+            Начать операцию
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div
       v-if="isStartedModalOpen"
@@ -1602,6 +1865,105 @@ function addField() {
   gap: var(--space-sm);
 }
 
+.modal-actions--two {
+  justify-content: space-between;
+}
+
+.modal-actions--two .modal-btn,
+.modal-actions--two .modal-btn-ghost {
+  flex: 1;
+  text-align: center;
+}
+
+.modal-select {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.modal-select:focus {
+  outline: none;
+  border-color: var(--accent-green);
+}
+
+.equipment-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.equipment-slider-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.equipment-slider-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.equipment-slider-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.equipment-slider-value {
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.equipment-condition-text {
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: var(--text-primary);
+  margin-top: -6px;
+}
+
+.equipment-range {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.equipment-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  border: 2px solid var(--bg-panel);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+
+.equipment-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  border: 2px solid var(--bg-panel);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+}
+
+.equipment-repair-notes {
+  margin-top: var(--space-sm);
+}
+
 .modal-btn,
 .modal-btn-ghost {
   padding: 8px 14px;
@@ -1616,7 +1978,7 @@ function addField() {
 .modal-btn {
   background: var(--accent-green);
   border-color: var(--accent-green);
-  color: #000;
+  color: #fff;
 }
 
 .modal-btn-ghost {

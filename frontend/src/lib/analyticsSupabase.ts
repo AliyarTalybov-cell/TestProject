@@ -28,6 +28,11 @@ export type OperationRow = {
   end_iso: string
   duration_minutes: number
   notes: string | null
+  equipment_id?: string | null
+  equipment_fuel_percent?: number | null
+  equipment_condition_value?: number | null
+  equipment_condition_label?: string | null
+  equipment_repair_notes?: string | null
 }
 
 function rowToDowntime(r: DowntimeRow): StoredDowntime {
@@ -57,6 +62,11 @@ function rowToOperation(r: OperationRow): StoredOperation {
     endISO: r.end_iso,
     durationMinutes: r.duration_minutes,
     notes: r.notes ?? undefined,
+    equipmentId: r.equipment_id ?? undefined,
+    equipmentFuelPercent: r.equipment_fuel_percent ?? undefined,
+    equipmentConditionValue: r.equipment_condition_value ?? undefined,
+    equipmentConditionLabel: r.equipment_condition_label ?? undefined,
+    equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
   }
 }
 
@@ -85,7 +95,7 @@ export async function insertOperation(
   userId: string | null,
 ): Promise<void> {
   if (!supabase) return
-  await supabase.from('operations').insert({
+  const basePayload = {
     user_id: userId,
     employee: op.employee,
     field_id: op.fieldId ?? null,
@@ -95,7 +105,26 @@ export async function insertOperation(
     end_iso: op.endISO,
     duration_minutes: op.durationMinutes,
     notes: op.notes?.trim() || null,
-  })
+  }
+
+  const payloadWithEquipment = {
+    ...basePayload,
+    equipment_id: op.equipmentId ?? null,
+    equipment_fuel_percent: op.equipmentFuelPercent ?? null,
+    equipment_condition_value: op.equipmentConditionValue ?? null,
+    equipment_condition_label: op.equipmentConditionLabel ?? null,
+    equipment_repair_notes: op.equipmentRepairNotes?.trim() || null,
+  }
+
+  try {
+    await supabase.from('operations').insert(payloadWithEquipment)
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string }
+    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
+    if (!isColumnError) throw e
+    // Если бекенд/БД ещё не содержит колонок под технику — пишем только базовые поля.
+    await supabase.from('operations').insert(basePayload)
+  }
 }
 
 export async function loadDowntimesFromSupabase(
@@ -120,16 +149,30 @@ export async function loadOperationsFromSupabase(
   userId: string | null,
 ): Promise<StoredOperation[]> {
   if (!supabase) return []
-  let q = supabase
-    .from('operations')
-    .select('id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes, notes')
-    .order('start_iso', { ascending: false })
-  if (onlyCurrentUser && userId) {
-    q = q.eq('user_id', userId)
+  const sb = supabase
+  const baseSelect = 'id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes, notes'
+  const extraSelect =
+    'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+
+  const attempt = async (select: string): Promise<StoredOperation[]> => {
+    let q = sb
+      .from('operations')
+      .select(select)
+      .order('start_iso', { ascending: false })
+    if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
+    const { data, error } = await q
+    if (error) throw error
+    return (data ?? []).map((r) => rowToOperation(r as unknown as OperationRow))
   }
-  const { data, error } = await q
-  if (error) throw error
-  return (data ?? []).map((r) => rowToOperation(r as OperationRow))
+
+  try {
+    return await attempt(`${baseSelect}, ${extraSelect}`)
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string }
+    const isColumnError = err?.code === '42703' || /column .* does not exist/i.test(err?.message ?? '')
+    if (!isColumnError) throw e
+    return attempt(baseSelect)
+  }
 }
 
 export { isSupabaseConfigured }

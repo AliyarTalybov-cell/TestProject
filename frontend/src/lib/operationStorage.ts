@@ -8,6 +8,11 @@ export type StoredOperation = {
   endISO: string
   durationMinutes: number
   notes?: string
+  equipmentId?: string | null
+  equipmentFuelPercent?: number | null
+  equipmentConditionValue?: number | null
+  equipmentConditionLabel?: string | null
+  equipmentRepairNotes?: string | null
 }
 
 export type ActiveOperation = {
@@ -16,6 +21,11 @@ export type ActiveOperation = {
   fieldName?: string
   operation?: string
   employee: string
+  equipmentId?: string | null
+  equipmentFuelPercent?: number | null
+  equipmentConditionValue?: number | null
+  equipmentConditionLabel?: string | null
+  equipmentRepairNotes?: string | null
 }
 
 const OPERATIONS_KEY = 'agro_ctrl:operations'
