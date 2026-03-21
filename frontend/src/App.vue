@@ -10,7 +10,7 @@ const auth = useAuth()
 const isAuthLayout = computed(() => route.name === 'login')
 const pageTitle = computed(() => (route.meta?.title as string) || 'Обзор')
 const { theme, setTheme } = useTheme()
-/** checked = светлая тема (как в переключателе Uiverse: день / солнце) */
+/** checked = светлая тема (Uiverse Creatlydev: солнце); не отмечено = луна / тёмная */
 const themeIsLight = computed({
   get: () => theme.value === 'light',
   set: (v: boolean) => setTheme(v ? 'light' : 'dark'),
@@ -222,23 +222,39 @@ watch(mobileMenuOpen, (open) => {
         </button>
         <h1 class="app-topbar-title">{{ pageTitle }}</h1>
         <div class="app-topbar-right">
-          <label
-            for="app-theme-switch"
-            class="app-theme-switch"
-            :title="theme === 'light' ? 'Переключить на тёмную тему' : 'Переключить на светлую тему'"
-          >
-            <input
-              id="app-theme-switch"
-              v-model="themeIsLight"
-              type="checkbox"
-              class="app-theme-switch-input"
-              role="switch"
-              :aria-checked="themeIsLight"
-              :aria-label="theme === 'light' ? 'Включить тёмную тему' : 'Включить светлую тему'"
-            />
-            <span class="app-theme-slider" aria-hidden="true" />
-            <span class="app-theme-decoration" aria-hidden="true" />
-          </label>
+          <div class="app-theme-cd-wrap">
+            <label
+              for="app-theme-cd-switch"
+              class="app-theme-cd-toggle"
+              :title="theme === 'dark' ? 'Переключить на светлую тему' : 'Переключить на тёмную тему'"
+            >
+              <input
+                id="app-theme-cd-switch"
+                v-model="themeIsLight"
+                type="checkbox"
+                class="app-theme-cd-input"
+                role="switch"
+                :aria-checked="themeIsLight"
+                :aria-label="theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'"
+              />
+              <div class="app-theme-cd-icon app-theme-cd-icon--moon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+                  <path
+                    fill-rule="evenodd"
+                    d="M9.528 1.718a.75.75 0 01.162.819A8.97 8.97 0 009 6a9 9 0 009 9 8.97 8.97 0 003.463-.69.75.75 0 01.981.98 10.503 10.503 0 01-9.694 6.46c-5.799 0-10.5-4.701-10.5-10.5 0-4.368 2.667-8.112 6.46-9.694a.75.75 0 01.818.162z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+              </div>
+              <div class="app-theme-cd-icon app-theme-cd-icon--sun" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+                  <path
+                    d="M12 2.25a.75.75 0 01.75.75v2.25a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM7.5 12a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM18.894 6.166a.75.75 0 00-1.06-1.06l-1.591 1.59a.75.75 0 101.06 1.061l1.591-1.59zM21.75 12a.75.75 0 01-.75.75h-2.25a.75.75 0 010-1.5H21a.75.75 0 01.75.75zM17.834 18.894a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 10-1.061 1.06l1.59 1.591zM12 18a.75.75 0 01.75.75V21a.75.75 0 01-1.5 0v-2.25A.75.75 0 0112 18zM7.758 17.303a.75.75 0 00-1.061-1.06l-1.591 1.59a.75.75 0 001.06 1.061l1.591-1.59zM6 12a.75.75 0 01-.75.75H3a.75.75 0 010-1.5h2.25A.75.75 0 016 12zM6.697 7.757a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 00-1.061 1.06l1.59 1.591z"
+                  />
+                </svg>
+              </div>
+            </label>
+          </div>
           <div class="topbar-user">
             <RouterLink to="/profile" class="topbar-user-link" aria-label="Настройки профиля">
               <div class="topbar-user-avatar">{{ userInitials }}</div>
@@ -374,106 +390,92 @@ watch(mobileMenuOpen, (open) => {
   filter: brightness(1.05);
 }
 
-/* Переключатель темы (адаптация Uiverse / juanpabl0svn) */
-.app-theme-switch {
-  font-size: 15px;
-  position: relative;
-  display: inline-flex;
+/* Переключатель темы (Uiverse / Creatlydev) */
+.app-theme-cd-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.app-theme-cd-toggle {
+  /* ~−24% от 56px (−30% затем +8%); фон как у шапки */
+  background-color: transparent;
+  width: calc(56px * 0.7 * 1.08);
+  height: calc(56px * 0.7 * 1.08);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: none;
+  line-height: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.app-theme-cd-toggle:hover {
+  background: var(--sidebar-hover-bg);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--border-color) 50%, transparent);
+}
+
+[data-theme='dark'] .app-theme-cd-toggle {
+  background-color: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  box-shadow: none;
+}
+
+[data-theme='dark'] .app-theme-cd-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.app-theme-cd-input {
+  display: none;
+}
+
+.app-theme-cd-toggle:has(.app-theme-cd-input:focus-visible) {
+  outline: 2px solid color-mix(in srgb, #2196f3 55%, white);
+  outline-offset: calc(3px * 0.7 * 1.08);
+}
+
+.app-theme-cd-icon {
+  grid-column: 1 / 1;
+  grid-row: 1 / 1;
+  transition: transform 500ms;
+  line-height: 0;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 3.5em;
-  height: 2em;
-  cursor: pointer;
-  flex-shrink: 0;
-  margin: 0;
 }
 
-.app-theme-switch-input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-  position: absolute;
-  margin: 0;
+.app-theme-cd-icon svg {
+  width: calc(32px * 0.7 * 1.08);
+  height: calc(32px * 0.7 * 1.08);
 }
 
-.app-theme-slider {
-  --theme-switch-track: #20262c;
-  position: absolute;
-  cursor: pointer;
-  inset: 0;
-  background-color: var(--theme-switch-track);
-  transition: background-color 0.5s ease;
-  border-radius: 30px;
+.app-theme-cd-icon--moon {
+  transition-delay: 200ms;
 }
 
-.app-theme-slider::before {
-  position: absolute;
-  content: '';
-  height: 1.4em;
-  width: 1.4em;
-  border-radius: 50%;
-  left: 10%;
-  bottom: 15%;
-  box-shadow:
-    inset 8px -4px 0 0 #ececd9,
-    -4px 1px 4px 0 #dadada;
-  background: var(--theme-switch-track);
-  transition:
-    transform 0.5s ease,
-    box-shadow 0.5s ease;
+.app-theme-cd-icon--sun {
+  transform: scale(0);
+  color: #ca8a04;
 }
 
-.app-theme-decoration {
-  position: absolute;
-  height: 2px;
-  width: 2px;
-  border-radius: 50%;
-  right: 20%;
-  top: 15%;
-  background: #e5f041e6;
-  backdrop-filter: blur(10px);
-  transition: all 0.5s ease;
-  pointer-events: none;
-  box-shadow:
-    -7px 10px 0 #e5f041e6,
-    8px 15px 0 #e5f041e6,
-    -17px 1px 0 #e5f041e6,
-    -20px 10px 0 #e5f041e6,
-    -7px 23px 0 #e5f041e6,
-    -15px 25px 0 #e5f041e6;
+.app-theme-cd-input:checked + .app-theme-cd-icon--moon {
+  transform: rotate(360deg) scale(0);
 }
 
-.app-theme-switch-input:checked ~ .app-theme-decoration {
-  transform: translateX(-20px);
-  width: 10px;
-  height: 10px;
-  background: white;
-  box-shadow:
-    -12px 0 0 white,
-    -6px 0 0 1.6px white,
-    5px 15px 0 1px white,
-    1px 17px 0 white,
-    10px 17px 0 white;
+.app-theme-cd-input:checked ~ .app-theme-cd-icon--sun {
+  transition-delay: 200ms;
+  transform: scale(1) rotate(360deg);
 }
 
-.app-theme-switch-input:checked + .app-theme-slider {
-  background-color: #5494de;
-}
-
-.app-theme-switch-input:checked + .app-theme-slider::before {
-  transform: translateX(100%);
-  box-shadow:
-    inset 15px -4px 0 15px #efdf2b,
-    0 0 10px 0 #efdf2b;
-}
-
-.app-theme-switch-input:focus-visible + .app-theme-slider {
-  outline: 2px solid color-mix(in srgb, #5494de 85%, white);
-  outline-offset: 3px;
-}
-
-.app-theme-switch:hover .app-theme-slider {
-  filter: brightness(1.06);
-}
 </style>
 

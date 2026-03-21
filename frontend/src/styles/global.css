@@ -435,24 +435,24 @@ a {
   border-top: 1px solid var(--sidebar-border);
 }
 
-/* Кнопка «Выйти» в сайдбаре (Uiverse / vinodjangid07), масштаб −12% */
+/* Кнопка «Выйти» в сайдбаре (Uiverse / vinodjangid07), масштаб −12% и ещё −10% */
 .app-logout-btn {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  width: calc(45px * 0.88);
-  height: calc(45px * 0.88);
+  width: calc(45px * 0.792);
+  height: calc(45px * 0.792);
   border: none;
   border-radius: 50%;
   cursor: pointer;
   position: relative;
   overflow: hidden;
   transition-duration: 0.3s;
-  box-shadow: calc(2px * 0.88) calc(2px * 0.88) calc(10px * 0.88) rgba(0, 0, 0, 0.199);
+  box-shadow: calc(2px * 0.792) calc(2px * 0.792) calc(10px * 0.792) rgba(0, 0, 0, 0.199);
   background-color: rgb(255, 65, 65);
   padding: 0;
   flex-shrink: 0;
-  font-size: calc(14px * 0.88);
+  font-size: calc(14px * 0.792);
   font-family: inherit;
 }
 
@@ -465,8 +465,8 @@ a {
 }
 
 .app-logout-sign svg {
-  width: calc(17px * 0.88);
-  height: calc(17px * 0.88);
+  width: calc(17px * 0.792);
+  height: calc(17px * 0.792);
   flex-shrink: 0;
 }
 
@@ -494,15 +494,15 @@ a {
 }
 
 .app-logout-btn:hover {
-  width: calc(125px * 0.88);
-  border-radius: calc(40px * 0.88);
+  width: calc(125px * 0.792);
+  border-radius: calc(40px * 0.792);
   transition-duration: 0.3s;
 }
 
 .app-logout-btn:hover .app-logout-sign {
   width: 30%;
   transition-duration: 0.3s;
-  padding-left: calc(20px * 0.88);
+  padding-left: calc(20px * 0.792);
   box-sizing: border-box;
 }
 
@@ -510,20 +510,20 @@ a {
   opacity: 1;
   width: 70%;
   transition-duration: 0.3s;
-  padding-right: calc(10px * 0.88);
+  padding-right: calc(10px * 0.792);
 }
 
 .app-logout-btn:active {
-  transform: translate(calc(2px * 0.88), calc(2px * 0.88));
+  transform: translate(calc(2px * 0.792), calc(2px * 0.792));
 }
 
 .app-logout-btn:focus-visible {
-  outline: calc(2px * 0.88) solid color-mix(in srgb, rgb(255, 65, 65) 65%, white);
-  outline-offset: calc(3px * 0.88);
+  outline: calc(2px * 0.792) solid color-mix(in srgb, rgb(255, 65, 65) 65%, white);
+  outline-offset: calc(3px * 0.792);
 }
 
 [data-theme='dark'] .app-logout-btn {
-  box-shadow: calc(2px * 0.88) calc(2px * 0.88) calc(14px * 0.88) rgba(0, 0, 0, 0.35);
+  box-shadow: calc(2px * 0.792) calc(2px * 0.792) calc(14px * 0.792) rgba(0, 0, 0, 0.35);
 }
 
 .main-content {
