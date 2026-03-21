@@ -1,789 +1,1085 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onActivated } from 'vue'
-import type { StoredDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
-import { loadEvents } from '@/lib/downtimeStorage'
-import { loadOperations } from '@/lib/operationStorage'
+import { computed, onMounted, onActivated, onUnmounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { useSupabaseCheck } from '@/composables/useSupabaseCheck'
 import { useAuth } from '@/stores/auth'
-import { isSupabaseConfigured, loadDowntimesFromSupabase, loadOperationsFromSupabase } from '@/lib/analyticsSupabase'
+import { isSupabaseConfigured } from '@/lib/supabase'
+import {
+  loadProfiles,
+  loadTasksFromSupabase,
+  taskDueDateToYmd,
+  type ProfileRow,
+  type TaskRow,
+  type TaskStatus,
+} from '@/lib/tasksSupabase'
+import { loadDowntimesFromSupabase, loadOperationsFromSupabase } from '@/lib/analyticsSupabase'
+import { loadOperatorStatusesFromSupabase, type OperatorStatusRow } from '@/lib/operatorStatusSupabase'
+import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
+import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
+import { avatarColorByPosition } from '@/lib/avatarColors'
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function isLikelyUuid(s: string): boolean {
+  return UUID_RE.test(s)
+}
 
 const { status: supabaseStatus, errorMessage: supabaseError, check: checkSupabase } = useSupabaseCheck()
 const auth = useAuth()
-const isManagerRole = computed(() => auth.userRole.value === 'manager')
+const isManager = computed(() => auth.userRole.value === 'manager')
 
-const events = ref<StoredDowntime[]>([])
-const operations = ref(loadOperations())
-const analyticsLoading = ref(true)
-const showAllDowntimes = ref(false)
-const showAllOperations = ref(false)
+const loading = ref(true)
+const profiles = ref<ProfileRow[]>([])
+const tasks = ref<TaskRow[]>([])
+const operatorStatuses = ref<OperatorStatusRow[]>([])
+const equipmentList = ref<EquipmentRow[]>([])
+const downtimes = ref<Awaited<ReturnType<typeof loadDowntimesFromSupabase>>>([])
+const operations = ref<Awaited<ReturnType<typeof loadOperationsFromSupabase>>>([])
+const fieldsCatalog = ref<FieldRow[]>([])
 
-async function loadAnalyticsData() {
-  analyticsLoading.value = true
-  if (isSupabaseConfigured() && auth.user.value) {
-    try {
-      const onlyMine = auth.userRole.value === 'worker'
-      const userId = auth.user.value.id
-      events.value = await loadDowntimesFromSupabase(onlyMine, userId)
-      operations.value = await loadOperationsFromSupabase(onlyMine, userId)
-    } catch {
-      events.value = loadEvents()
-      operations.value = loadOperations()
-    }
-  } else {
-    events.value = loadEvents()
-    operations.value = loadOperations()
-  }
-  analyticsLoading.value = false
+const periodPreset = ref<'today' | 'week' | 'month'>('today')
+const dateFrom = ref('')
+const dateTo = ref('')
+const selectedEmployeeId = ref<string>('')
+
+const liveTick = ref(0)
+let liveTimer: ReturnType<typeof setInterval> | null = null
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0')
 }
 
-const ROW_LIMIT = 5
-const hoveredCategory = ref<DowntimeCategory | null>(null)
-const animateProgress = ref(0)
-onMounted(() => {
-  const duration = 700
-  const start = performance.now()
-  const tick = (now: number) => {
-    const elapsed = now - start
-    animateProgress.value = Math.min(1, elapsed / duration)
-    if (animateProgress.value < 1) requestAnimationFrame(tick)
-  }
-  requestAnimationFrame(tick)
-})
-
-onMounted(loadAnalyticsData)
-onActivated(loadAnalyticsData)
-
-const hasEvents = computed(() => events.value.length > 0)
-
-const sortedEvents = computed(() =>
-  [...events.value].sort(
-    (a, b) => new Date(b.startISO).getTime() - new Date(a.startISO).getTime(),
-  ),
-)
-
-const sortedOperations = computed(() =>
-  [...operations.value].sort(
-    (a, b) => new Date(b.startISO).getTime() - new Date(a.startISO).getTime(),
-  ),
-)
-
-const visibleDowntimes = computed(() =>
-  showAllDowntimes.value ? sortedEvents.value : sortedEvents.value.slice(0, ROW_LIMIT),
-)
-const visibleOperations = computed(() =>
-  showAllOperations.value ? sortedOperations.value : sortedOperations.value.slice(0, ROW_LIMIT),
-)
-const hasMoreDowntimes = computed(() => sortedEvents.value.length > ROW_LIMIT)
-const hasMoreOperations = computed(() => sortedOperations.value.length > ROW_LIMIT)
-
-const totalMinutes = computed(() =>
-  events.value.reduce((sum, e) => sum + e.durationMinutes, 0),
-)
-
-const totalHoursLabel = computed(() => {
-  if (!totalMinutes.value) return '0 ч'
-  const hours = totalMinutes.value / 60
-  return `${hours.toFixed(1)} ч`
-})
-
-const totalOpsMinutes = computed(() =>
-  operations.value.reduce((sum, o) => sum + o.durationMinutes, 0),
-)
-const totalOpsHoursLabel = computed(() => {
-  if (!totalOpsMinutes.value) return '0 ч'
-  return `${(totalOpsMinutes.value / 60).toFixed(1)} ч`
-})
-const hasOperations = computed(() => operations.value.length > 0)
-
-const categoriesMeta: Record<
-  DowntimeCategory,
-  { label: string; colorClass: string }
-> = {
-  breakdown: { label: 'Поломка техники', colorClass: 'legend-breakdown' },
-  rain: { label: 'Дождь / погода', colorClass: 'legend-rain' },
-  fuel: { label: 'Нет топлива', colorClass: 'legend-fuel' },
-  waiting: { label: 'Ожидание задания', colorClass: 'legend-waiting' },
-}
-const categoryKeys = ['breakdown', 'rain', 'fuel', 'waiting'] as const
-
-const minutesByCategory = computed(() => {
-  const base: Record<DowntimeCategory, number> = {
-    breakdown: 0,
-    rain: 0,
-    fuel: 0,
-    waiting: 0,
-  }
-  events.value.forEach((e) => {
-    base[e.category] += e.durationMinutes
-  })
-  return base
-})
-
-const percentsByCategory = computed(() => {
-  const total = Object.values(minutesByCategory.value).reduce(
-    (sum, m) => sum + m,
-    0,
-  )
-  if (!total) {
-    return {
-      breakdown: 0,
-      rain: 0,
-      fuel: 0,
-      waiting: 0,
-    }
-  }
-  return {
-    breakdown: (minutesByCategory.value.breakdown / total) * 100,
-    rain: (minutesByCategory.value.rain / total) * 100,
-    fuel: (minutesByCategory.value.fuel / total) * 100,
-    waiting: (minutesByCategory.value.waiting / total) * 100,
-  }
-})
-
-const donutStyle = computed(() => {
-  const b = percentsByCategory.value.breakdown
-  const r = percentsByCategory.value.rain
-  const f = percentsByCategory.value.fuel
-  const w = percentsByCategory.value.waiting
-
-  if (!(b + r + f + w)) {
-    return { background: 'var(--donut-inner-bg)' }
-  }
-
-  const s1 = b
-  const s2 = b + r
-  const s3 = b + r + f
-
-  return {
-    background: `conic-gradient(
-      var(--danger-red) 0 ${s1}%,
-      #3c91d3 ${s1}% ${s2}%,
-      var(--warning-orange) ${s2}% ${s3}%,
-      #9ca3af ${s3}% 100%
-    )`,
-  }
-})
-
-const topEmployees = computed(() => {
-  const map = new Map<string, number>()
-  events.value.forEach((e) => {
-    map.set(e.employee, (map.get(e.employee) ?? 0) + e.durationMinutes)
-  })
-  return Array.from(map.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4)
-})
-
-const OPERATION_COLORS = ['#2e7d32', '#1565c0', '#6a1b9a', '#c62828', '#ef6c00', '#00838f', '#558b2f', '#9e9e9e']
-
-const operationMinutes = computed(() => {
-  const map = new Map<string, number>()
-  operations.value.forEach((o) => {
-    const name = o.operation?.trim() || '—'
-    map.set(name, (map.get(name) ?? 0) + o.durationMinutes)
-  })
-  return map
-})
-
-const operationPercents = computed(() => {
-  const total = totalOpsMinutes.value
-  if (!total) return [] as { name: string; percent: number; minutes: number }[]
-  return Array.from(operationMinutes.value.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, minutes]) => ({
-      name,
-      percent: (minutes / total) * 100,
-      minutes,
-    }))
-})
-
-const donutStyleOps = computed(() => {
-  const entries = operationPercents.value
-  if (!entries.length) return { background: 'var(--donut-inner-bg)' }
-  let acc = 0
-  const parts = entries.map((e, i) => {
-    const start = acc
-    acc += e.percent
-    return `${OPERATION_COLORS[i % OPERATION_COLORS.length]} ${start}% ${acc}%`
-  })
-  return {
-    background: `conic-gradient(${parts.join(', ')})`,
-  }
-})
-
-const hoveredOperation = ref<string | null>(null)
-
-const topEmployeesOps = computed(() => {
-  const map = new Map<string, number>()
-  operations.value.forEach((o) => {
-    map.set(o.employee, (map.get(o.employee) ?? 0) + o.durationMinutes)
-  })
-  return Array.from(map.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4)
-})
-
-const displayedOpsTotalHoursLabel = computed(() => {
-  if (!totalOpsMinutes.value) return '0 ч'
-  const hours = (animateProgress.value * totalOpsMinutes.value) / 60
-  return `${hours.toFixed(1)} ч`
-})
-
-const WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'] as const
-const dynamicsMetric = ref<'hours' | 'percent'>('hours')
-
-type DayData = { label: string; workMinutes: number; waitingMinutes: number; downtimeMinutes: number }
-
-/** Ключ календарного дня в локальной таймзоне (YYYY-MM-DD) для однозначного сравнения */
-function toDayKey(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+function toYmd(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
-/** Локальная календарная дата для момента (чтобы вечернее UTC не переходило на следующий день) */
-function toLocalDayKey(iso: string): string {
-  const d = new Date(iso)
-  return toDayKey(d)
+function parseYmd(s: string): Date {
+  const [y, m, day] = s.split('-').map(Number)
+  return new Date(y, (m || 1) - 1, day || 1, 12, 0, 0)
 }
 
-const dynamicsLast7Days = computed((): DayData[] => {
-  const result: DayData[] = []
+function applyPeriodPreset() {
   const now = new Date()
-  const dayKeys = new Map<string, { work: number; downtime: number }>()
-  // Строим 7 дней: от «6 дней назад» до «сегодня» по локальной календарной дате
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12, 0, 0)
-    const key = toDayKey(d)
-    dayKeys.set(key, { work: 0, downtime: 0 })
+  if (periodPreset.value === 'today') {
+    dateFrom.value = toYmd(now)
+    dateTo.value = toYmd(now)
+  } else if (periodPreset.value === 'week') {
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0)
+    const start = new Date(end)
+    start.setDate(start.getDate() - 6)
+    dateFrom.value = toYmd(start)
+    dateTo.value = toYmd(end)
+  } else {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 12, 0, 0)
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12, 0, 0)
+    dateFrom.value = toYmd(start)
+    dateTo.value = toYmd(end)
   }
-  operations.value.forEach((o) => {
-    const key = toLocalDayKey(o.startISO)
-    const day = dayKeys.get(key)
-    if (day) day.work += o.durationMinutes
+}
+
+
+const rangeBounds = computed(() => {
+  const start = parseYmd(dateFrom.value || toYmd(new Date()))
+  start.setHours(0, 0, 0, 0)
+  const end = parseYmd(dateTo.value || dateFrom.value || toYmd(new Date()))
+  end.setHours(23, 59, 59, 999)
+  return { start, end }
+})
+
+/** Предыдущий интервал той же длины (для сравнения простоев) */
+const previousRangeBounds = computed(() => {
+  const { start, end } = rangeBounds.value
+  const ms = end.getTime() - start.getTime()
+  const prevEnd = new Date(start.getTime() - 1)
+  const prevStart = new Date(prevEnd.getTime() - ms)
+  return { start: prevStart, end: prevEnd }
+})
+
+/** Для блока Live и KPI «из N работников» — без руководителей */
+const workerProfiles = computed(() =>
+  profiles.value.filter((p) => p.role !== 'manager'),
+)
+
+/** Карточки Live: работники + все, кто указан исполнителем в загруженных задачах (даже если роль «руководитель»). */
+const profilesForLiveBoard = computed(() => {
+  const byId = new Map<string, ProfileRow>()
+  for (const p of workerProfiles.value) {
+    byId.set(p.id, p)
+  }
+  for (const t of tasks.value) {
+    const p = profileById.value.get(t.assignee_id)
+    if (p) byId.set(p.id, p)
+  }
+  return Array.from(byId.values()).sort((a, b) => {
+    const na = (a.display_name || a.email).toLowerCase()
+    const nb = (b.display_name || b.email).toLowerCase()
+    return na.localeCompare(nb, 'ru')
   })
-  events.value.forEach((e) => {
-    const key = toLocalDayKey(e.startISO)
-    const day = dayKeys.get(key)
-    if (day) day.downtime += e.durationMinutes
+})
+
+function resolveFieldIdByTaskField(raw: string): string | null {
+  const t = raw.trim()
+  if (!t) return null
+  for (const f of fieldsCatalog.value) {
+    if (f.name === t) return f.id
+  }
+  const norm = t.toLowerCase()
+  for (const f of fieldsCatalog.value) {
+    const longForm = `поле №${f.number} — ${f.name}`.toLowerCase()
+    if (norm === longForm || norm.includes(f.name.toLowerCase())) return f.id
+  }
+  return null
+}
+
+/** Ссылка на карточку поля: uuid из оператора или сопоставление по названию из справочника полей. */
+function resolveFieldRouteId(fieldIdText: string | null | undefined, fieldName: string | null | undefined): string | null {
+  if (fieldIdText && isLikelyUuid(fieldIdText)) return fieldIdText
+  const name = fieldName?.trim()
+  if (name) {
+    const byName = resolveFieldIdByTaskField(name)
+    if (byName) return byName
+  }
+  if (fieldIdText?.trim()) {
+    const byRaw = resolveFieldIdByTaskField(fieldIdText)
+    if (byRaw) return byRaw
+  }
+  return null
+}
+
+function fieldDetailLinkForStatus(st: OperatorStatusRow | undefined): string | null {
+  if (!st) return null
+  return resolveFieldRouteId(st.field_id, st.field_name)
+}
+
+const profilesForEmployeeFilter = computed(() =>
+  [...profiles.value].sort((a, b) => {
+    const na = (a.display_name || a.email).toLowerCase()
+    const nb = (b.display_name || b.email).toLowerCase()
+    return na.localeCompare(nb, 'ru')
+  }),
+)
+
+const profileById = computed(() => new Map(profiles.value.map((p) => [p.id, p])))
+
+const equipmentById = computed(() => new Map(equipmentList.value.map((e) => [e.id, e])))
+
+function equipmentTitle(id: string | null | undefined): string {
+  if (!id) return 'Техника не назначена'
+  const e = equipmentById.value.get(id)
+  if (!e) return 'Техника'
+  const m = e.model?.trim()
+  return m ? `${e.brand} ${m}` : `${e.brand} ${e.license_plate}`
+}
+
+function initials(p: ProfileRow): string {
+  const name = (p.display_name || '').trim()
+  const email = p.email || ''
+  if (name) {
+    const parts = name.split(/\s+/).filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+    if (parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase()
+    return parts[0][0].toUpperCase()
+  }
+  const local = email.split('@')[0]
+  return local.length >= 2 ? local.slice(0, 2).toUpperCase() : local[0]?.toUpperCase() || '?'
+}
+
+function shortName(p: ProfileRow): string {
+  const name = (p.display_name || '').trim()
+  if (!name) return p.email.split('@')[0] || '—'
+  const parts = name.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return `${parts[0]} ${parts[1][0]}.`
+  return name
+}
+
+function avatarBg(p: ProfileRow): string {
+  if (p.position?.trim()) return avatarColorByPosition(p.position)
+  return avatarColorByPosition(p.email || p.id)
+}
+
+const statusByUserId = computed(() => {
+  const m = new Map<string, OperatorStatusRow>()
+  for (const s of operatorStatuses.value) {
+    m.set(s.user_id, s)
+  }
+  return m
+})
+
+const filteredWorkersForLive = computed(() => {
+  if (selectedEmployeeId.value) {
+    const one = profiles.value.find((p) => p.id === selectedEmployeeId.value)
+    return one ? [one] : []
+  }
+  return profilesForLiveBoard.value
+})
+
+const kpiInOperationCount = computed(() => {
+  let rows = operatorStatuses.value.filter((s) => s.kind === 'operation')
+  if (selectedEmployeeId.value) {
+    rows = rows.filter((s) => s.user_id === selectedEmployeeId.value)
+  }
+  return rows.length
+})
+
+const kpiTotalWorkers = computed(() => {
+  if (selectedEmployeeId.value) return 1
+  return Math.max(profilesForLiveBoard.value.length, 1)
+})
+
+const kpiEquipmentInUse = computed(() => {
+  const set = new Set<string>()
+  for (const s of operatorStatuses.value) {
+    if (s.kind === 'operation' && s.equipment_id) {
+      if (selectedEmployeeId.value && s.user_id !== selectedEmployeeId.value) continue
+      set.add(s.equipment_id)
+    }
+  }
+  return set.size
+})
+
+const kpiTotalEquipment = computed(() => equipmentList.value.length)
+
+function downtimeMinutesInRange(
+  start: Date,
+  end: Date,
+  list: typeof downtimes.value,
+): number {
+  let sum = 0
+  for (const e of list) {
+    const t = new Date(e.startISO).getTime()
+    if (t >= start.getTime() && t <= end.getTime()) {
+      sum += e.durationMinutes
+    }
+  }
+  return sum
+}
+
+const kpiDowntimeHours = computed(() => {
+  const { start, end } = rangeBounds.value
+  let list = downtimes.value
+  if (selectedEmployeeId.value) {
+    const p = profileById.value.get(selectedEmployeeId.value)
+    const label = p ? (p.display_name || p.email).trim() : ''
+    if (label) {
+      list = list.filter((d) => d.employee === label || d.employee.includes(label))
+    }
+  }
+  return downtimeMinutesInRange(start, end, list) / 60
+})
+
+const kpiDowntimeTrend = computed(() => {
+  const cur = kpiDowntimeHours.value
+  const { start, end } = previousRangeBounds.value
+  let list = downtimes.value
+  if (selectedEmployeeId.value) {
+    const p = profileById.value.get(selectedEmployeeId.value)
+    const label = p ? (p.display_name || p.email).trim() : ''
+    if (label) list = list.filter((d) => d.employee === label || d.employee.includes(label))
+  }
+  const prevH = downtimeMinutesInRange(start, end, list) / 60
+  if (prevH <= 0 && cur <= 0) return null
+  if (prevH <= 0) return { pct: 100, up: true }
+  const pct = Math.round(((cur - prevH) / prevH) * 100)
+  return { pct: Math.abs(pct), up: pct >= 0 }
+})
+
+/**
+ * Выполненные задачи по сроку (due_date):
+ * — если в фильтре один день (С = По): все со сроком **не позже** этой даты (накопительно «до даты»);
+ * — если интервал: срок строго внутри «С»–«По» включительно.
+ */
+const tasksCompletedDueInFilter = computed(() => {
+  const from = dateFrom.value
+  const to = dateTo.value
+  if (!to) return 0
+  const singleDay = Boolean(from && from === to)
+  return tasks.value.filter((t) => {
+    const dueYmd = taskDueDateToYmd(t.due_date)
+    if (!dueYmd) return false
+    if (t.status !== 'done') return false
+    if (singleDay) {
+      if (dueYmd > to) return false
+    } else {
+      if (!from || dueYmd < from || dueYmd > to) return false
+    }
+    if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) return false
+    return true
+  }).length
+})
+
+const tasksKpiTitle = computed(() => 'Задачи по сроку (выполненные)')
+
+const tasksKpiRangeHint = computed(() => {
+  if (!dateTo.value) return ''
+  if (dateFrom.value && dateFrom.value === dateTo.value) {
+    const d = parseYmd(dateTo.value)
+    return `срок не позже ${d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })}`
+  }
+  if (dateFrom.value) {
+    return `срок: ${dateFrom.value} — ${dateTo.value}`
+  }
+  return `срок до ${dateTo.value}`
+})
+
+/** Для одного дня — на странице задач открываем фильтр «до даты» без нижней границы по сроку. */
+const tasksKpiLinkQuery = computed(() => {
+  const from = dateFrom.value
+  const to = dateTo.value
+  if (from && to && from === to) {
+    return { due_to: to, due_upto: '1', kpi_completed_due: '1' }
+  }
+  return { due_from: from, due_to: to, kpi_completed_due: '1' }
+})
+
+const tasksInRange = computed(() => {
+  const { start, end } = rangeBounds.value
+  return tasks.value.filter((t) => {
+    if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) return false
+    const u = new Date(t.updated_at).getTime()
+    return u >= start.getTime() && u <= end.getTime()
   })
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12, 0, 0)
-    const key = toDayKey(d)
-    const day = dayKeys.get(key) ?? { work: 0, downtime: 0 }
-    result.push({
-      label: WEEKDAY_LABELS[d.getDay()],
-      workMinutes: day.work,
-      waitingMinutes: 0,
-      downtimeMinutes: day.downtime,
+})
+
+const taskStatusLabels: Record<TaskStatus, string> = {
+  done: 'Выполнено',
+  in_progress: 'В процессе',
+  review: 'На проверке',
+  todo: 'К выполнению',
+}
+
+const taskDonut = computed(() => {
+  const list = tasksInRange.value
+  const done = list.filter((t) => t.status === 'done').length
+  const prog = list.filter((t) => t.status === 'in_progress').length
+  const review = list.filter((t) => t.status === 'review').length
+  const todo = list.filter((t) => t.status === 'todo').length
+  const total = list.length
+  if (!total) {
+    return { total: 0, slices: [] as { key: string; label: string; count: number; pct: number; color: string }[] }
+  }
+  const slices = [
+    { key: 'done', label: taskStatusLabels.done, count: done, pct: (done / total) * 100, color: '#22c55e' },
+    { key: 'in_progress', label: taskStatusLabels.in_progress, count: prog, pct: (prog / total) * 100, color: '#3b82f6' },
+    { key: 'review', label: taskStatusLabels.review, count: review, pct: (review / total) * 100, color: '#f59e0b' },
+    { key: 'todo', label: taskStatusLabels.todo, count: todo, pct: (todo / total) * 100, color: '#94a3b8' },
+  ].filter((s) => s.count > 0)
+  return { total, slices }
+})
+
+const taskDonutGradient = computed(() => {
+  const { slices } = taskDonut.value
+  if (!slices.length) return { background: 'var(--donut-inner-bg)' }
+  let acc = 0
+  const parts = slices.map((s) => {
+    const start = acc
+    acc += s.pct
+    return `${s.color} ${start}% ${acc}%`
+  })
+  return { background: `conic-gradient(${parts.join(', ')})` }
+})
+
+/** Вертикальные столбцы: высота = только «Выполнено»; шкала Y — по максимуму активных задач в периоде (не done), чтобы видеть объём активной работы. */
+const taskEmployeeBarChart = computed(() => {
+  const { start, end } = rangeBounds.value
+  const t0 = start.getTime()
+  const t1 = end.getTime()
+
+  const activeByAssignee = new Map<string, number>()
+  for (const t of tasks.value) {
+    if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) continue
+    if (t.status === 'done') continue
+    const u = new Date(t.updated_at).getTime()
+    if (u < t0 || u > t1) continue
+    activeByAssignee.set(t.assignee_id, (activeByAssignee.get(t.assignee_id) ?? 0) + 1)
+  }
+  const maxActive = activeByAssignee.size ? Math.max(...activeByAssignee.values()) : 0
+
+  const doneMap = new Map<string, { id: string; label: string; count: number }>()
+  for (const t of tasks.value) {
+    if (t.status !== 'done') continue
+    if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) continue
+    const u = new Date(t.updated_at).getTime()
+    if (u < t0 || u > t1) continue
+    const existing = doneMap.get(t.assignee_id)
+    const p = profileById.value.get(t.assignee_id)
+    doneMap.set(t.assignee_id, {
+      id: t.assignee_id,
+      label: p ? shortName(p) : '—',
+      count: (existing?.count ?? 0) + 1,
     })
   }
-  return result
+  const rows = Array.from(doneMap.values())
+    .filter((r) => r.count > 0)
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count
+      return a.label.localeCompare(b.label, 'ru')
+    })
+    .slice(0, 8)
+
+  const maxDone = rows.length ? Math.max(...rows.map((r) => r.count)) : 0
+  const scaleRaw = Math.max(1, maxActive, maxDone)
+  const roughStep = Math.max(1, Math.ceil(scaleRaw / 4))
+  const niceSteps = [1, 2, 5, 10, 15, 20, 25, 50, 100]
+  const niceStep = niceSteps.find((n) => n >= roughStep) ?? Math.ceil(roughStep / 10) * 10
+  const yTop = Math.max(niceStep, Math.ceil(scaleRaw / niceStep) * niceStep)
+  const yTicks: number[] = []
+  for (let v = yTop; v >= 0; v -= niceStep) yTicks.push(v)
+  return { rows, yTop, yTicks }
 })
 
-const dynamicsMaxMinutes = computed(() => {
-  let max = 0
-  dynamicsLast7Days.value.forEach((day) => {
-    const total = day.workMinutes + day.waitingMinutes + day.downtimeMinutes
-    if (total > max) max = total
-  })
-  return Math.max(max, 60)
+function taskProgressPercent(status: TaskStatus): number {
+  if (status === 'done') return 100
+  if (status === 'review') return 82
+  if (status === 'in_progress') return 52
+  return 8
+}
+
+const activeFieldsRows = computed(() => {
+  return tasks.value
+    .filter((t) => {
+      if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) return false
+      return t.status === 'in_progress' || t.status === 'review' || t.status === 'todo'
+    })
+    .slice(0, 12)
+    .map((t) => {
+      const assignee = profileById.value.get(t.assignee_id)
+      return {
+        task: t,
+        assigneeName: assignee ? assignee.display_name || assignee.email : '—',
+        progress: taskProgressPercent(t.status),
+        fieldDetailId: resolveFieldIdByTaskField(t.field),
+      }
+    })
 })
 
-function dynamicsBarHeight(minutes: number, day?: DayData): string {
-  if (dynamicsMetric.value === 'percent' && day) {
-    const total = day.workMinutes + day.waitingMinutes + day.downtimeMinutes
-    if (!total) return '0%'
-    return `${(minutes / total) * 100}%`
+function categoryLabelRu(cat: string | null | undefined): string {
+  const c = (cat || '').toLowerCase()
+  if (c === 'breakdown') return 'Поломка техники'
+  if (c === 'rain') return 'Погода'
+  if (c === 'fuel') return 'Нет топлива'
+  if (c === 'waiting') return 'Ожидание'
+  return cat || 'Простой'
+}
+
+function elapsedLabel(startedAt: string): string {
+  void liveTick.value
+  const start = new Date(startedAt).getTime()
+  const sec = Math.max(0, Math.floor((Date.now() - start) / 1000))
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  if (h > 0) return `${h}ч ${m}м`
+  return `${m} мин`
+}
+
+function shiftProgressForUser(userId: string): number {
+  const startOfDay = new Date()
+  startOfDay.setHours(0, 0, 0, 0)
+  let minutes = 0
+  for (const o of operations.value) {
+    if (new Date(o.startISO) < startOfDay) continue
+    const p = profileById.value.get(userId)
+    const name = p ? (p.display_name || p.email).trim() : ''
+    if (name && o.employee === name) minutes += o.durationMinutes
   }
-  if (!dynamicsMaxMinutes.value) return '0%'
-  const pct = (minutes / dynamicsMaxMinutes.value) * 100
-  return `${Math.min(100, pct)}%`
+  const st = statusByUserId.value.get(userId)
+  void liveTick.value
+  if (st?.kind === 'operation') {
+    const extra = Math.max(0, (Date.now() - new Date(st.started_at).getTime()) / 60000)
+    minutes += extra
+  }
+  const target = 8 * 60
+  return Math.min(100, Math.round((minutes / target) * 100))
 }
 
-const displayedTotalHoursLabel = computed(() => {
-  if (!totalMinutes.value) return '0 ч'
-  const hours = (animateProgress.value * totalMinutes.value) / 60
-  return `${hours.toFixed(1)} ч`
+function equipmentUsageLabel(eqId: string): 'work' | 'idle' {
+  for (const s of operatorStatuses.value) {
+    if (s.kind === 'operation' && s.equipment_id === eqId) return 'work'
+  }
+  return 'idle'
+}
+
+function equipmentConditionBadge(eq: EquipmentRow): { text: string; tone: 'ok' | 'warn' | 'muted' } {
+  if (eq.condition === 'repair') {
+    return { text: 'В ремонте', tone: 'warn' }
+  }
+  if (eq.condition === 'decommissioned') {
+    return { text: 'Выведена', tone: 'muted' }
+  }
+  if (equipmentUsageLabel(eq.id) === 'work') {
+    return { text: 'В работе', tone: 'ok' }
+  }
+  return { text: 'Исправна', tone: 'ok' }
+}
+
+const equipmentRows = computed(() => {
+  return equipmentList.value.slice(0, 20).map((eq) => {
+    let operatorName = '—'
+    for (const s of operatorStatuses.value) {
+      if (s.equipment_id === eq.id && s.kind === 'operation') {
+        operatorName = s.employee
+        break
+      }
+    }
+    const badge = equipmentConditionBadge(eq)
+    return { eq, operatorName, badge }
+  })
 })
-const displayedPercent = (key: DowntimeCategory) =>
-  Math.round(animateProgress.value * (percentsByCategory.value[key] ?? 0))
-const displayedMinutes = (key: DowntimeCategory) =>
-  Math.round(animateProgress.value * (minutesByCategory.value[key] ?? 0))
 
-function formatDuration(minutes: number): string {
-  if (!minutes) return '0 мин'
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  if (!h) return `${m} мин`
-  if (!m) return `${h} ч`
-  return `${h} ч ${m} мин`
+async function loadDashboard() {
+  loading.value = true
+  try {
+    if (!isSupabaseConfigured() || !auth.user.value) {
+      profiles.value = []
+      tasks.value = []
+      operatorStatuses.value = []
+      equipmentList.value = []
+      downtimes.value = []
+      operations.value = []
+      fieldsCatalog.value = []
+      return
+    }
+    const uid = auth.user.value.id
+    const onlyMine = !isManager.value
+    const [prof, tsk, st, eq, down, ops, flds] = await Promise.all([
+      loadProfiles(),
+      loadTasksFromSupabase(onlyMine, uid),
+      loadOperatorStatusesFromSupabase(onlyMine, uid),
+      loadEquipment(),
+      loadDowntimesFromSupabase(onlyMine, uid),
+      loadOperationsFromSupabase(onlyMine, uid),
+      loadFields(),
+    ])
+    profiles.value = prof
+    tasks.value = tsk
+    operatorStatuses.value = st
+    equipmentList.value = eq
+    downtimes.value = down
+    operations.value = ops
+    fieldsCatalog.value = flds
+  } catch (e) {
+    console.error(e)
+  } finally {
+    loading.value = false
+  }
 }
 
-function formatClock(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
+onMounted(() => {
+  applyPeriodPreset()
+  loadDashboard()
+  liveTimer = setInterval(() => {
+    liveTick.value += 1
+  }, 30000)
+})
+onActivated(() => loadDashboard())
+onUnmounted(() => {
+  if (liveTimer) clearInterval(liveTimer)
+})
 
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-  })
-}
 </script>
 
 <template>
-  <section class="reports-page">
-    <header class="header-area reports-header page-enter-item">
+  <section class="dash-page">
+    <header class="dash-header page-enter-item">
       <div>
-        <div class="type-label">Сводка</div>
-        <h1 class="page-title">Аналитика</h1>
-        <p v-if="auth.user && isManagerRole" class="reports-role-hint">
-          Режим руководителя: данные по всем сотрудникам
-        </p>
-      </div>
-      <div class="reports-header-meta">
-        <div v-if="analyticsLoading" class="reports-loading-hint">Загрузка…</div>
-        <template v-else>
-        <div class="summary-item">
-          <div class="type-label">Простои: записей</div>
-          <div class="type-value">{{ events.length }}</div>
-        </div>
-        <div class="summary-item">
-          <div class="type-label">Простои: время</div>
-          <div class="type-value">{{ totalHoursLabel }}</div>
-        </div>
-        <div class="summary-item">
-          <div class="type-label">Операции: записей</div>
-          <div class="type-value">{{ operations.length }}</div>
-        </div>
-        <div class="summary-item">
-          <div class="type-label">Операции: время</div>
-          <div class="type-value">{{ totalOpsHoursLabel }}</div>
-        </div>
-        </template>
+        <h1 class="dash-title">Аналитика: Дашборд руководителя</h1>
+        <p v-if="auth.user && isManager" class="dash-sub">Данные из задач, операций и техники (Supabase)</p>
+        <p v-else-if="auth.user" class="dash-sub">Ваши задачи и статус (ограниченный вид)</p>
       </div>
     </header>
 
-    <div v-if="supabaseStatus !== 'idle'" class="supabase-status page-enter-item">
-      <template v-if="supabaseStatus === 'checking'">
-        <span class="supabase-status-dot supabase-status-dot--loading" />
-        Проверка подключения к базе данных...
-      </template>
-      <template v-else-if="supabaseStatus === 'ok'">
-        <span class="supabase-status-dot supabase-status-dot--ok" />
-        База данных Supabase: подключено
-      </template>
+    <div v-if="supabaseStatus !== 'idle'" class="supabase-strip page-enter-item">
+      <template v-if="supabaseStatus === 'checking'">Проверка базы…</template>
+      <template v-else-if="supabaseStatus === 'ok'">База данных подключена</template>
       <template v-else-if="supabaseStatus === 'error'">
-        <span class="supabase-status-dot supabase-status-dot--error" />
-        Ошибка подключения: {{ supabaseError }}
-        <button type="button" class="supabase-status-retry" @click="checkSupabase">Повторить</button>
+        Ошибка: {{ supabaseError }}
+        <button type="button" class="dash-link-btn" @click="checkSupabase">Повторить</button>
       </template>
     </div>
 
-    <section class="analytics-dynamics page-enter-item" style="--enter-delay: 40ms">
-      <div class="type-label analytics-dynamics-section-label">Дополнительная аналитика</div>
-      <div class="panel analytics-dynamics-card">
-        <div class="analytics-dynamics-header">
-          <div>
-            <div class="type-label analytics-dynamics-sublabel">ДИНАМИКА</div>
-            <h2 class="analytics-dynamics-title">Активность за 7 дней</h2>
-          </div>
-          <div class="analytics-dynamics-select-wrap">
-            <select v-model="dynamicsMetric" class="analytics-dynamics-select" aria-label="Единица измерения">
-              <option value="hours">Часы работы</option>
-              <option value="percent">Процент</option>
-            </select>
-          </div>
+    <div class="dash-toolbar page-enter-item" style="--enter-delay: 40ms">
+      <div class="dash-toolbar-left">
+        <div v-if="isManager" class="dash-select-wrap">
+          <select v-model="selectedEmployeeId" class="dash-select" aria-label="Сотрудник">
+            <option value="">Все сотрудники</option>
+            <option v-for="p in profilesForEmployeeFilter" :key="p.id" :value="p.id">
+              {{ p.display_name || p.email }}{{ p.role === 'manager' ? ' (руководитель)' : '' }}
+            </option>
+          </select>
         </div>
-        <div class="analytics-dynamics-chart">
-          <div
-            v-for="(day, idx) in dynamicsLast7Days"
-            :key="idx"
-            class="dynamics-bar-col"
+        <div class="dash-segment" role="group" aria-label="Период">
+          <button
+            type="button"
+            :class="['dash-seg-btn', { 'dash-seg-btn--active': periodPreset === 'today' }]"
+            @click=";(periodPreset = 'today'), applyPeriodPreset()"
           >
-            <div class="dynamics-bar-stack">
-              <div
-                v-if="day.workMinutes > 0"
-                class="dynamics-bar dynamics-bar--work"
-                :style="{ height: dynamicsBarHeight(day.workMinutes, day) }"
-                :title="`В работе: ${(day.workMinutes / 60).toFixed(1)} ч`"
-              />
-              <div
-                v-if="day.waitingMinutes > 0"
-                class="dynamics-bar dynamics-bar--waiting"
-                :style="{ height: dynamicsBarHeight(day.waitingMinutes, day) }"
-                :title="`Ожидание: ${(day.waitingMinutes / 60).toFixed(1)} ч`"
-              />
-              <div
-                v-if="day.downtimeMinutes > 0"
-                class="dynamics-bar dynamics-bar--downtime"
-                :style="{ height: dynamicsBarHeight(day.downtimeMinutes, day) }"
-                :title="`Простой: ${(day.downtimeMinutes / 60).toFixed(1)} ч`"
-              />
-            </div>
-            <span class="dynamics-day-label">{{ day.label }}</span>
+            Сегодня
+          </button>
+          <button
+            type="button"
+            :class="['dash-seg-btn', { 'dash-seg-btn--active': periodPreset === 'week' }]"
+            @click=";(periodPreset = 'week'), applyPeriodPreset()"
+          >
+            Неделя
+          </button>
+          <button
+            type="button"
+            :class="['dash-seg-btn', { 'dash-seg-btn--active': periodPreset === 'month' }]"
+            @click=";(periodPreset = 'month'), applyPeriodPreset()"
+          >
+            Месяц
+          </button>
+        </div>
+        <div class="dash-dates">
+          <label class="dash-date-label"
+            >С:
+            <input v-model="dateFrom" type="date" class="dash-date-input"
+          /></label>
+          <label class="dash-date-label"
+            >По:
+            <input v-model="dateTo" type="date" class="dash-date-input"
+          /></label>
+        </div>
+      </div>
+      <button type="button" class="dash-refresh" :disabled="loading" @click="loadDashboard">
+        <span class="dash-refresh-icon" aria-hidden="true">↻</span>
+        {{ loading ? 'Загрузка…' : 'Обновить данные' }}
+      </button>
+    </div>
+
+    <div class="dash-kpis page-enter-item" style="--enter-delay: 80ms">
+      <div class="dash-kpi">
+        <div class="dash-kpi-icon dash-kpi-icon--people">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+        </div>
+        <div>
+          <p class="dash-kpi-label">Люди в полях</p>
+          <div class="dash-kpi-value-row">
+            <span class="dash-kpi-num">{{ kpiInOperationCount }}</span>
+            <span class="dash-kpi-of">из {{ kpiTotalWorkers }}</span>
           </div>
         </div>
-        <div class="analytics-dynamics-legend">
-          <span class="dynamics-legend-item dynamics-legend-item--work">В работе</span>
-          <span class="dynamics-legend-item dynamics-legend-item--waiting">Ожидание</span>
-          <span class="dynamics-legend-item dynamics-legend-item--downtime">Простой</span>
+      </div>
+      <div class="dash-kpi">
+        <div class="dash-kpi-icon dash-kpi-icon--tractor">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 7h13l5 5v5a2 2 0 0 1-2 2H7a4 4 0 0 1-4-4V7z" />
+            <path d="M16 7v5h5" />
+            <circle cx="7" cy="18" r="2" />
+          </svg>
+        </div>
+        <div>
+          <p class="dash-kpi-label">Техника в работе</p>
+          <div class="dash-kpi-value-row">
+            <span class="dash-kpi-num">{{ kpiEquipmentInUse }}</span>
+            <span class="dash-kpi-of">из {{ kpiTotalEquipment }} ед.</span>
+          </div>
+        </div>
+      </div>
+      <div class="dash-kpi">
+        <div class="dash-kpi-icon dash-kpi-icon--alert">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 8v4M12 16h.01" />
+          </svg>
+        </div>
+        <div>
+          <p class="dash-kpi-label">Простои (период)</p>
+          <div class="dash-kpi-value-row">
+            <span class="dash-kpi-num">{{ kpiDowntimeHours.toFixed(1) }}</span>
+            <span class="dash-kpi-of">ч</span>
+            <span v-if="kpiDowntimeTrend" class="dash-kpi-trend" :class="{ 'dash-kpi-trend--down': !kpiDowntimeTrend.up }">
+              {{ kpiDowntimeTrend.up ? '↑' : '↓' }} {{ kpiDowntimeTrend.pct }}%
+            </span>
+          </div>
+        </div>
+      </div>
+      <RouterLink
+        class="dash-kpi dash-kpi--click"
+        :to="{ name: 'task-management', query: tasksKpiLinkQuery }"
+      >
+        <div class="dash-kpi-icon dash-kpi-icon--tasks">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l3 3L22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+          </svg>
+        </div>
+        <div>
+          <p class="dash-kpi-label">{{ tasksKpiTitle }}</p>
+          <p class="dash-kpi-sublabel">{{ tasksKpiRangeHint }}</p>
+          <div class="dash-kpi-value-row">
+            <span class="dash-kpi-num">{{ tasksCompletedDueInFilter }}</span>
+            <span class="dash-kpi-of">выполнено</span>
+          </div>
+        </div>
+      </RouterLink>
+    </div>
+
+    <section class="dash-live page-enter-item" style="--enter-delay: 120ms">
+      <h2 class="dash-section-title">
+        <span class="dash-section-icon" aria-hidden="true">👥</span>
+        Статус работы сотрудников (Live)
+      </h2>
+      <p v-if="!isSupabaseConfigured()" class="dash-muted">Подключите Supabase, чтобы видеть статусы с экрана оператора.</p>
+      <p v-else-if="loading" class="dash-muted">Загрузка…</p>
+      <div v-else class="dash-live-grid">
+        <div
+          v-for="p in filteredWorkersForLive"
+          :key="p.id"
+          class="dash-live-card"
+          :class="{
+            'dash-live-card--work': statusByUserId.get(p.id)?.kind === 'operation',
+            'dash-live-card--down': statusByUserId.get(p.id)?.kind === 'downtime',
+            'dash-live-card--idle': !statusByUserId.get(p.id),
+          }"
+        >
+          <div class="dash-live-topbar" />
+          <div class="dash-live-head">
+            <div class="dash-live-avatar" :style="{ background: avatarBg(p) }">{{ initials(p) }}</div>
+            <div>
+              <h3 class="dash-live-name">{{ p.display_name || p.email }}</h3>
+              <span
+                v-if="statusByUserId.get(p.id)?.kind === 'operation'"
+                class="dash-live-badge dash-live-badge--ok"
+              >
+                В работе
+              </span>
+              <span
+                v-else-if="statusByUserId.get(p.id)?.kind === 'downtime'"
+                class="dash-live-badge dash-live-badge--bad"
+              >
+                Простой
+              </span>
+              <span v-else class="dash-live-badge dash-live-badge--muted">Ожидание задачи</span>
+            </div>
+          </div>
+
+          <template v-if="statusByUserId.get(p.id)?.kind === 'operation'">
+            <RouterLink
+              v-if="fieldDetailLinkForStatus(statusByUserId.get(p.id))"
+              :to="{ name: 'field-details', params: { id: fieldDetailLinkForStatus(statusByUserId.get(p.id))! } }"
+              class="dash-live-box dash-live-box--link"
+            >
+              <div class="dash-live-box-meta">📍 {{ statusByUserId.get(p.id)?.field_name || 'Поле' }}</div>
+              <div class="dash-live-box-title">{{ statusByUserId.get(p.id)?.operation || 'Операция' }}</div>
+            </RouterLink>
+            <div v-else class="dash-live-box">
+              <div class="dash-live-box-meta">📍 {{ statusByUserId.get(p.id)?.field_name || 'Поле' }}</div>
+              <div class="dash-live-box-title">{{ statusByUserId.get(p.id)?.operation || 'Операция' }}</div>
+            </div>
+            <div class="dash-live-progress">
+              <div class="dash-live-progress-label">
+                <span>Прогресс смены (оценка)</span>
+                <span>{{ shiftProgressForUser(p.id) }}%</span>
+              </div>
+              <div class="dash-live-track">
+                <div
+                  class="dash-live-fill dash-live-fill--green"
+                  :style="{ width: `${shiftProgressForUser(p.id)}%` }"
+                />
+              </div>
+            </div>
+            <div class="dash-live-foot">
+              <RouterLink
+                v-if="statusByUserId.get(p.id)?.equipment_id"
+                :to="{ name: 'equipment-details', params: { id: statusByUserId.get(p.id)!.equipment_id! } }"
+                class="dash-inline-link"
+              >
+                🚜 {{ equipmentTitle(statusByUserId.get(p.id)?.equipment_id) }}
+              </RouterLink>
+              <span v-else>🚜 {{ equipmentTitle(statusByUserId.get(p.id)?.equipment_id) }}</span>
+              <span>🕐 {{ elapsedLabel(statusByUserId.get(p.id)!.started_at) }}</span>
+            </div>
+          </template>
+
+          <template v-else-if="statusByUserId.get(p.id)?.kind === 'downtime'">
+            <RouterLink
+              v-if="fieldDetailLinkForStatus(statusByUserId.get(p.id))"
+              :to="{ name: 'field-details', params: { id: fieldDetailLinkForStatus(statusByUserId.get(p.id))! } }"
+              class="dash-live-box dash-live-box--alert dash-live-box--link"
+            >
+              <div class="dash-live-box-meta">{{ categoryLabelRu(statusByUserId.get(p.id)?.downtime_category) }}</div>
+              <div class="dash-live-box-title">{{ statusByUserId.get(p.id)?.downtime_reason || '—' }}</div>
+            </RouterLink>
+            <div v-else class="dash-live-box dash-live-box--alert">
+              <div class="dash-live-box-meta">{{ categoryLabelRu(statusByUserId.get(p.id)?.downtime_category) }}</div>
+              <div class="dash-live-box-title">{{ statusByUserId.get(p.id)?.downtime_reason || '—' }}</div>
+            </div>
+            <div class="dash-live-progress">
+              <div class="dash-live-progress-label">
+                <span>Длительность простоя</span>
+                <span class="dash-live-bad">{{ elapsedLabel(statusByUserId.get(p.id)!.started_at) }}</span>
+              </div>
+              <div class="dash-live-track">
+                <div class="dash-live-fill dash-live-fill--red" style="width: 100%" />
+              </div>
+            </div>
+            <div class="dash-live-foot">
+              <RouterLink
+                v-if="fieldDetailLinkForStatus(statusByUserId.get(p.id))"
+                :to="{ name: 'field-details', params: { id: fieldDetailLinkForStatus(statusByUserId.get(p.id))! } }"
+                class="dash-inline-link"
+              >
+                📍 {{ statusByUserId.get(p.id)?.field_name || 'База' }}
+              </RouterLink>
+              <span v-else>📍 {{ statusByUserId.get(p.id)?.field_name || 'База' }}</span>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="dash-live-box dash-live-box--empty">
+              <span>Нет активной операции</span>
+            </div>
+            <div class="dash-live-progress">
+              <div class="dash-live-progress-label">
+                <span>Прогресс смены</span>
+                <span>{{ shiftProgressForUser(p.id) }}%</span>
+              </div>
+              <div class="dash-live-track">
+                <div
+                  class="dash-live-fill dash-live-fill--muted"
+                  :style="{ width: `${shiftProgressForUser(p.id)}%` }"
+                />
+              </div>
+            </div>
+            <div class="dash-live-foot muted">Техника не назначена</div>
+          </template>
+        </div>
+      </div>
+      <p v-if="isManager && !loading && isSupabaseConfigured() && !filteredWorkersForLive.length" class="dash-muted">
+        Нет работников в справочнике и нет исполнителей в задачах — добавьте профили или назначьте задачи.
+      </p>
+    </section>
+
+    <div class="dash-split page-enter-item" style="--enter-delay: 160ms">
+      <div class="dash-panel">
+        <div class="dash-panel-head">
+          <h2 class="dash-panel-title">🌾 Активные поля (по задачам)</h2>
+          <RouterLink to="/fields" class="dash-panel-link">Все поля</RouterLink>
+        </div>
+        <div class="dash-table-wrap">
+          <table class="dash-table">
+            <thead>
+              <tr>
+                <th>Поле / объект</th>
+                <th>Операция</th>
+                <th>Выполнение</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in activeFieldsRows" :key="row.task.id">
+                <td>
+                  <RouterLink
+                    v-if="row.fieldDetailId"
+                    :to="{ name: 'field-details', params: { id: row.fieldDetailId } }"
+                    class="dash-field-link"
+                  >
+                    <div class="dash-td-main">{{ row.task.field }}</div>
+                  </RouterLink>
+                  <template v-else>
+                    <div class="dash-td-main">{{ row.task.field }}</div>
+                  </template>
+                  <span class="dash-chip dash-chip--amber">{{ taskStatusLabels[row.task.status] }}</span>
+                </td>
+                <td>
+                  <div>{{ row.task.title }}</div>
+                  <div class="dash-td-sub">{{ row.assigneeName }}</div>
+                </td>
+                <td>
+                  <div class="dash-pbar-wrap">
+                    <div class="dash-pbar">
+                      <div
+                        class="dash-pbar-fill"
+                        :class="{ 'dash-pbar-fill--warn': row.task.status === 'todo' }"
+                        :style="{ width: `${row.progress}%` }"
+                      />
+                    </div>
+                    <span>{{ row.progress }}%</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="!activeFieldsRows.length" class="dash-empty">Нет активных задач в работе.</p>
+        </div>
+      </div>
+
+      <div class="dash-panel">
+        <div class="dash-panel-head">
+          <h2 class="dash-panel-title">🚜 Статус техники</h2>
+          <div class="dash-legend-inline">
+            <span><i class="dot dot--g" /> В работе</span>
+            <span><i class="dot dot--n" /> Свободна</span>
+          </div>
+        </div>
+        <ul class="dash-eq-list">
+          <li v-for="{ eq, operatorName, badge } in equipmentRows" :key="eq.id" class="dash-eq-item">
+            <RouterLink :to="{ name: 'equipment-details', params: { id: eq.id } }" class="dash-eq-link">
+              <div class="dash-eq-icon" :class="{ 'dash-eq-icon--bad': eq.condition === 'repair' }">
+                <span>🚜</span>
+              </div>
+              <div class="dash-eq-body">
+                <div class="dash-eq-title">{{ eq.brand }} {{ eq.model || eq.license_plate }}</div>
+                <div class="dash-eq-meta">
+                  <code class="dash-mono">{{ eq.license_plate }}</code>
+                  <span>{{ operatorName }}</span>
+                </div>
+                <p v-if="eq.condition === 'repair' && eq.notes" class="dash-eq-note">{{ eq.notes }}</p>
+              </div>
+            </RouterLink>
+            <span class="dash-eq-badge" :class="`dash-eq-badge--${badge.tone}`">{{ badge.text }}</span>
+          </li>
+        </ul>
+        <p v-if="!equipmentRows.length" class="dash-empty">Техника не заведена в справочнике.</p>
+      </div>
+    </div>
+
+    <section class="dash-task-stats page-enter-item" style="--enter-delay: 200ms">
+      <h2 class="dash-section-title">📊 Статистика задач</h2>
+      <div class="dash-charts">
+        <div class="dash-chart-card">
+          <h3 class="dash-chart-title">Распределение по статусам</h3>
+          <div class="dash-donut-row">
+            <div class="dash-donut" :style="taskDonutGradient">
+              <div class="dash-donut-inner">
+                <div class="dash-donut-num">{{ taskDonut.total }}</div>
+                <div class="dash-donut-label">Всего задач</div>
+              </div>
+            </div>
+            <ul class="dash-donut-legend">
+              <li v-for="s in taskDonut.slices" :key="s.key">
+                <i class="dash-leg-dot" :style="{ background: s.color }" />
+                <span>{{ s.label }}</span>
+                <strong>{{ s.count }}</strong>
+              </li>
+            </ul>
+          </div>
+          <p v-if="!taskDonut.total" class="dash-empty">Нет задач в выбранном периоде.</p>
+        </div>
+        <div class="dash-chart-card">
+          <h3 class="dash-chart-title">Выполнение задач по сотрудникам (за период)</h3>
+          <p class="dash-chart-sub muted">
+            Столбцы — число выполненных за период (по дате обновления); сотрудники отсортированы по убыванию этого числа. Верх шкалы Y — по максимуму <strong>активных</strong> задач в периоде (к выполнению / в процессе / на проверке) среди исполнителей, чтобы масштаб отражал объём текущей работы. Разбивка статусов — слева.
+          </p>
+          <div v-if="taskEmployeeBarChart.rows.length" class="dash-vchart">
+            <div class="dash-vchart-inner">
+              <div class="dash-vchart-y" aria-hidden="true">
+                <span v-for="tick in taskEmployeeBarChart.yTicks" :key="tick">{{ tick }}</span>
+              </div>
+              <div class="dash-vchart-plot">
+                <div
+                  v-for="tick in taskEmployeeBarChart.yTicks"
+                  :key="'grid-' + tick"
+                  class="dash-vchart-hline"
+                  :style="{ bottom: `${(tick / taskEmployeeBarChart.yTop) * 100}%` }"
+                />
+                <div class="dash-vchart-cols">
+                  <div v-for="r in taskEmployeeBarChart.rows" :key="r.id" class="dash-vchart-col">
+                    <div class="dash-vchart-col-body">
+                      <span class="dash-vchart-total">{{ r.count }}</span>
+                      <div
+                        class="dash-vchart-stack dash-vchart-stack--done-only"
+                        :style="{ height: `${(r.count / taskEmployeeBarChart.yTop) * 100}%` }"
+                        :title="`Выполнено: ${r.count}`"
+                      >
+                        <div class="dash-vchart-seg dash-vchart-seg--done" />
+                      </div>
+                    </div>
+                    <span class="dash-vchart-xlabel">{{ r.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="dash-vchart-legend">
+              <span><i class="dash-leg-dot" style="background: #22c55e" /> Выполнено</span>
+            </div>
+          </div>
+          <p v-else class="dash-empty">Нет завершённых задач в периоде.</p>
         </div>
       </div>
     </section>
-
-    <div class="reports-grid">
-      <section class="panel panel-table page-enter-item" style="--enter-delay: 80ms">
-        <div class="panel-header">
-          <div>
-            <div class="type-label">Журнал</div>
-            <div class="panel-title">Простои техники</div>
-          </div>
-        </div>
-
-        <div v-if="!hasEvents" class="empty-state">
-          <p class="placeholder-text">
-            Пока нет записей о простоях. Как только пользователь начнёт и завершит простой на экране оператора, запись появится в этом журнале.
-          </p>
-        </div>
-
-        <div v-else>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Сотрудник</th>
-                  <th>Поле / операция</th>
-                  <th>Причина</th>
-                  <th>Дата</th>
-                  <th>Время</th>
-                  <th class="text-right">Длительность</th>
-                  <th>Список дел</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="event in visibleDowntimes" :key="event.id">
-                  <td class="cell-employee">
-                    {{ event.employee }}
-                  </td>
-                  <td class="cell-field">
-                    <template v-if="event.fieldName || event.operation">
-                      <div v-if="event.fieldName" class="cell-field-main">
-                        {{ event.fieldName }}
-                      </div>
-                      <div v-if="event.operation" class="cell-field-sub">
-                        {{ event.operation }}
-                      </div>
-                    </template>
-                    <span v-else class="cell-field-empty">—</span>
-                  </td>
-                  <td class="cell-reason">
-                    <span
-                      class="reason-dot"
-                      :class="`reason-dot-${event.category}`"
-                    />
-                    <span>{{ event.reason }}</span>
-                  </td>
-                  <td class="cell-date">
-                    {{ formatDate(event.startISO) }}
-                  </td>
-                  <td class="cell-time">
-                    {{ formatClock(event.startISO) }}–{{ formatClock(event.endISO) }}
-                  </td>
-                  <td class="cell-duration text-right">
-                    {{ formatDuration(event.durationMinutes) }}
-                  </td>
-                  <td class="cell-notes">
-                    <span v-if="event.notes" class="cell-notes-text">{{ event.notes }}</span>
-                    <span v-else class="cell-notes-empty">—</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <button
-            v-if="hasMoreDowntimes"
-            type="button"
-            class="show-all-btn"
-            @click="showAllDowntimes = !showAllDowntimes"
-          >
-            {{ showAllDowntimes ? 'Свернуть' : 'Показать все' }}
-            ({{ sortedEvents.length }})
-          </button>
-        </div>
-      </section>
-
-      <section class="panel panel-chart page-enter-item" style="--enter-delay: 140ms">
-        <div class="panel-header">
-          <div>
-            <div class="type-label">Структура простоев</div>
-            <div class="panel-title">По причинам и сотрудникам</div>
-          </div>
-        </div>
-
-        <div v-if="hasEvents" class="chart-layout">
-          <div
-            class="donut-wrapper chart-wrapper-interactive"
-            :data-hover="hoveredCategory ?? ''"
-          >
-            <div class="donut-chart reports-donut" :style="donutStyle">
-              <div class="donut-inner">
-                <div class="donut-total">
-                  {{ displayedTotalHoursLabel }}
-                </div>
-                <div class="donut-label">Всего простоя</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="chart-side">
-            <ul class="legend">
-              <li
-                v-for="(key, idx) in categoryKeys"
-                :key="key"
-                class="legend-item legend-item-reveal"
-                :class="{ 'legend-item-active': hoveredCategory === key }"
-                :style="{ '--legend-delay': 0.35 + idx * 0.08 + 's' }"
-                @mouseenter="hoveredCategory = key"
-                @mouseleave="hoveredCategory = null"
-              >
-                <div class="legend-label">
-                  <span class="legend-color" :class="categoriesMeta[key].colorClass" />
-                  <span>{{ categoriesMeta[key].label }}</span>
-                </div>
-                <span class="legend-value">
-                  {{ displayedPercent(key) }}% ·
-                  {{ formatDuration(displayedMinutes(key)) }}
-                </span>
-              </li>
-            </ul>
-
-            <div class="top-employees">
-              <div class="type-label">Топ по времени простоя</div>
-              <ul class="top-list">
-                <li
-                  v-for="([name, minutes], idx) in topEmployees"
-                  :key="name"
-                  class="top-item top-item-reveal"
-                  :style="{ '--top-delay': 0.6 + idx * 0.06 + 's' }"
-                >
-                  <span class="top-name">{{ name }}</span>
-                  <span class="top-value">{{ formatDuration(minutes) }}</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="empty-state">
-          <p class="placeholder-text">
-            Как только появятся данные о простоях, мы покажем распределение по причинам и сотрудникам.
-          </p>
-        </div>
-      </section>
-
-      <section class="panel panel-table page-enter-item" style="--enter-delay: 180ms">
-        <div class="panel-header">
-          <div>
-            <div class="type-label">Журнал</div>
-            <div class="panel-title">Операции</div>
-          </div>
-        </div>
-
-        <div v-if="!operations.length" class="empty-state">
-          <p class="placeholder-text">
-            Завершённые операции появятся здесь после нажатия «Остановить операцию» на экране оператора.
-          </p>
-        </div>
-
-        <div v-else>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Сотрудник</th>
-                  <th>Поле / операция</th>
-                  <th>Дата</th>
-                  <th>Время</th>
-                  <th class="text-right">Длительность</th>
-                  <th>Список дел</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="op in visibleOperations" :key="op.id">
-                  <td class="cell-employee">{{ op.employee }}</td>
-                  <td class="cell-field">
-                    <template v-if="op.fieldName || op.operation">
-                      <div v-if="op.fieldName" class="cell-field-main">{{ op.fieldName }}</div>
-                      <div v-if="op.operation" class="cell-field-sub">{{ op.operation }}</div>
-                    </template>
-                    <span v-else class="cell-field-empty">—</span>
-                  </td>
-                  <td class="cell-date">{{ formatDate(op.startISO) }}</td>
-                  <td class="cell-time">
-                    {{ formatClock(op.startISO) }}–{{ formatClock(op.endISO) }}
-                  </td>
-                  <td class="cell-duration text-right">
-                    {{ formatDuration(op.durationMinutes) }}
-                  </td>
-                  <td class="cell-notes">
-                    <span v-if="op.notes" class="cell-notes-text">{{ op.notes }}</span>
-                    <span v-else class="cell-notes-empty">—</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <button
-            v-if="hasMoreOperations"
-            type="button"
-            class="show-all-btn"
-            @click="showAllOperations = !showAllOperations"
-          >
-            {{ showAllOperations ? 'Свернуть' : 'Показать все' }}
-            ({{ sortedOperations.length }})
-          </button>
-        </div>
-      </section>
-
-      <section class="panel panel-chart page-enter-item operations-chart-panel" style="--enter-delay: 220ms">
-        <div class="panel-header">
-          <div>
-            <div class="type-label">Структура операций</div>
-            <div class="panel-title">По типам операций и сотрудникам</div>
-          </div>
-        </div>
-
-        <div v-if="hasOperations" class="chart-layout">
-          <div
-            class="donut-wrapper chart-wrapper-interactive chart-wrapper-ops"
-            :data-hover="hoveredOperation ?? ''"
-          >
-            <div class="donut-chart reports-donut reports-donut-ops" :style="donutStyleOps">
-              <div class="donut-inner">
-                <div class="donut-total">{{ displayedOpsTotalHoursLabel }}</div>
-                <div class="donut-label">Всего работ</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="chart-side">
-            <ul class="legend">
-              <li
-                v-for="(entry, idx) in operationPercents"
-                :key="entry.name"
-                class="legend-item legend-item-reveal"
-                :class="{ 'legend-item-active': hoveredOperation === entry.name }"
-                :style="{ '--legend-delay': 0.35 + idx * 0.08 + 's' }"
-                @mouseenter="hoveredOperation = entry.name"
-                @mouseleave="hoveredOperation = null"
-              >
-                <div class="legend-label">
-                  <span
-                    class="legend-color legend-color-ops"
-                    :style="{ backgroundColor: OPERATION_COLORS[idx % OPERATION_COLORS.length] }"
-                  />
-                  <span>{{ entry.name }}</span>
-                </div>
-                <span class="legend-value">
-                  {{ Math.round(animateProgress * entry.percent) }}% ·
-                  {{ formatDuration(entry.minutes) }}
-                </span>
-              </li>
-            </ul>
-
-            <div class="top-employees">
-              <div class="type-label">Топ по времени работ</div>
-              <ul class="top-list">
-                <li
-                  v-for="([name, minutes], idx) in topEmployeesOps"
-                  :key="name"
-                  class="top-item top-item-reveal"
-                  :style="{ '--top-delay': 0.6 + idx * 0.06 + 's' }"
-                >
-                  <span class="top-name">{{ name }}</span>
-                  <span class="top-value">{{ formatDuration(minutes) }}</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="empty-state">
-          <p class="placeholder-text">
-            Как только появятся данные об операциях, здесь будет распределение по типам и сотрудникам.
-          </p>
-        </div>
-      </section>
-    </div>
   </section>
 </template>
 
 <style scoped>
-.reports-page {
+.dash-page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding-bottom: var(--space-xl);
   display: flex;
   flex-direction: column;
-  gap: var(--space-xl);
+  gap: var(--space-lg);
 }
 
-.analytics-dynamics {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
+.dash-header {
+  padding-bottom: var(--space-sm);
 }
 
-.analytics-dynamics-section-label {
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.analytics-dynamics-card {
-  border-radius: 12px;
-  padding: var(--space-lg);
-}
-
-.analytics-dynamics-sublabel {
-  color: var(--text-secondary);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  margin-bottom: 4px;
-}
-
-.analytics-dynamics-title {
+.dash-title {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.35rem;
+  font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
-.analytics-dynamics-header {
+.dash-sub {
+  margin: 6px 0 0;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.supabase-strip {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--chip-bg);
+  border: 1px solid var(--border-color);
+}
+
+.dash-link-btn {
+  margin-left: 10px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.dash-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--space-lg);
+  gap: 16px;
+  padding: 16px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
 }
 
-.analytics-dynamics-select-wrap {
-  flex-shrink: 0;
+.dash-toolbar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
 }
 
-.analytics-dynamics-select {
-  padding: 8px 28px 8px 12px;
+.dash-select {
+  min-width: 200px;
+  padding: 8px 32px 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--chip-bg);
+  background: var(--bg-base);
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   cursor: pointer;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
@@ -791,569 +1087,889 @@ function formatDate(iso: string): string {
   background-position: right 8px center;
 }
 
-.analytics-dynamics-chart {
+.dash-segment {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 140px;
-  padding: 0 4px;
-}
-
-.dynamics-bar-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.dynamics-bar-stack {
-  width: 100%;
-  max-width: 36px;
-  height: 100px;
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: center;
-  border-radius: 6px 6px 0 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   overflow: hidden;
-  background: var(--chip-bg);
+  background: var(--bg-base);
 }
 
-.dynamics-bar {
-  width: 100%;
-  min-height: 2px;
-  border-radius: 0;
-  transition: height 0.3s ease;
-}
-
-.dynamics-bar--work {
-  background: var(--accent-green);
-}
-
-.dynamics-bar--waiting {
-  background: var(--text-secondary);
-  opacity: 0.6;
-}
-
-.dynamics-bar--downtime {
-  background: var(--danger-red);
-}
-
-.dynamics-day-label {
-  font-size: 0.75rem;
-  font-weight: 500;
+.dash-seg-btn {
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
   color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-right: 1px solid var(--border-color);
+}
+.dash-seg-btn:last-child {
+  border-right: none;
+}
+.dash-seg-btn--active {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-.analytics-dynamics-legend {
+.dash-dates {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-md);
-  margin-top: var(--space-md);
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--border-color);
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
 }
 
-.dynamics-legend-item {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+.dash-date-input {
+  margin-left: 6px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.dash-refresh {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-green, #2d5a3d);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.dash-refresh:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
-.dynamics-legend-item::before {
-  content: '';
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+.dash-refresh-icon {
+  font-size: 1.1rem;
+  line-height: 1;
 }
 
-.dynamics-legend-item--work::before {
-  background: var(--accent-green);
+.dash-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
 }
 
-.dynamics-legend-item--waiting::before {
-  background: var(--text-secondary);
-  opacity: 0.6;
+@media (max-width: 1024px) {
+  .dash-kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  .dash-kpis {
+    grid-template-columns: 1fr;
+  }
 }
 
-.dynamics-legend-item--downtime::before {
-  background: var(--danger-red);
+.dash-kpi {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
 }
 
-.reports-role-hint {
-  margin: 6px 0 0;
-  font-size: 0.85rem;
-  color: var(--accent-green);
+.dash-kpi--click {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
-.reports-loading-hint {
-  font-size: 0.9rem;
+.dash-kpi--click:hover {
+  border-color: var(--accent-green, #2d5a3d);
+  box-shadow: 0 4px 14px rgba(45, 90, 61, 0.12);
+}
+
+.dash-kpi-sublabel {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dash-kpi-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.dash-kpi-icon--people {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+.dash-kpi-icon--tractor {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+.dash-kpi-icon--alert {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+.dash-kpi-icon--tasks {
+  background: rgba(245, 158, 11, 0.18);
+  color: #d97706;
+}
+
+.dash-kpi-label {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
   color: var(--text-secondary);
 }
-.reports-header {
-  padding-bottom: var(--space-md);
+
+.dash-kpi-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dash-kpi-num {
+  font-size: 1.65rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.dash-kpi-of {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dash-kpi-trend {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #dc2626;
+}
+.dash-kpi-trend--down {
+  color: #16a34a;
+}
+
+.dash-section-title {
+  margin: 0 0 16px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash-muted {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.dash-live-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+@media (max-width: 1200px) {
+  .dash-live-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .dash-live-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dash-live-card {
+  position: relative;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 18px;
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.dash-live-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: #9ca3af;
+}
+.dash-live-card--work .dash-live-topbar {
+  background: #22c55e;
+}
+.dash-live-card--down .dash-live-topbar {
+  background: #ef4444;
+}
+.dash-live-card--idle .dash-live-topbar {
+  background: #9ca3af;
+}
+
+.dash-live-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.dash-live-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.dash-live-name {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dash-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.dash-live-badge--ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+.dash-live-badge--bad {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+.dash-live-badge--muted {
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+}
+
+.dash-live-box {
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.dash-live-box--alert {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+.dash-live-box--empty {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.dash-live-box-meta {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.dash-live-box-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dash-live-box--link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  transition: background 0.15s ease;
+}
+.dash-live-box--link:hover {
+  background: var(--row-hover-bg);
+}
+
+.dash-inline-link {
+  color: var(--accent-green, #2d5a3d);
+  font-weight: 600;
+  text-decoration: none;
+}
+.dash-inline-link:hover {
+  text-decoration: underline;
+}
+
+.dash-field-link {
+  text-decoration: none;
+  color: inherit;
+}
+.dash-field-link:hover .dash-td-main {
+  color: var(--accent-green, #2d5a3d);
+  text-decoration: underline;
+}
+
+.dash-live-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.dash-live-bad {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.dash-live-track {
+  height: 6px;
+  background: var(--chip-bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.dash-live-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.dash-live-fill--green {
+  background: #22c55e;
+}
+.dash-live-fill--red {
+  background: #ef4444;
+}
+.dash-live-fill--muted {
+  background: #cbd5e1;
+}
+
+.dash-live-foot {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+.dash-live-foot.muted {
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.dash-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .dash-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dash-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.dash-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.supabase-status {
+.dash-panel-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.dash-panel-link {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-green, #2d5a3d);
+  text-decoration: none;
+}
+.dash-panel-link:hover {
+  text-decoration: underline;
+}
+
+.dash-legend-inline {
+  display: flex;
+  gap: 12px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.dot--g {
+  background: #22c55e;
+}
+.dot--n {
+  background: #94a3b8;
+}
+
+.dash-table-wrap {
+  overflow-x: auto;
+}
+
+.dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.dash-table th {
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-color);
+}
+.dash-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.dash-td-main {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dash-td-sub {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.dash-chip {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.dash-chip--amber {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+
+.dash-pbar-wrap {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  margin-bottom: var(--space-md);
-  border-radius: 10px;
-  font-size: 0.9rem;
-  background: var(--chip-bg);
-  border: 1px solid var(--border-color);
 }
-.supabase-status-dot {
+.dash-pbar {
+  flex: 1;
+  max-width: 120px;
+  height: 8px;
+  background: var(--chip-bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.dash-pbar-fill {
+  height: 100%;
+  background: #22c55e;
+  border-radius: 999px;
+}
+.dash-pbar-fill--warn {
+  background: #94a3b8;
+}
+
+.dash-empty {
+  padding: 20px 16px;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.dash-eq-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dash-eq-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dash-eq-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+}
+.dash-eq-link:hover .dash-eq-title {
+  color: var(--accent-green, #2d5a3d);
+  text-decoration: underline;
+}
+
+.dash-eq-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  flex-shrink: 0;
+}
+.dash-eq-icon--bad {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.dash-eq-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-eq-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+}
+
+.dash-eq-meta {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.dash-mono {
+  font-family: ui-monospace, monospace;
+  background: var(--chip-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+
+.dash-eq-note {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  color: #b91c1c;
+}
+
+.dash-eq-badge {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 999px;
+}
+.dash-eq-badge--ok {
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
+}
+.dash-eq-badge--warn {
+  background: rgba(239, 68, 68, 0.15);
+  color: #b91c1c;
+}
+.dash-eq-badge--muted {
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+}
+
+.dash-task-stats {
+  margin-top: 8px;
+}
+
+.dash-charts {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 18px;
+}
+
+@media (max-width: 900px) {
+  .dash-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dash-chart-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+}
+
+.dash-chart-title {
+  margin: 0 0 16px;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.dash-donut-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: center;
+}
+
+.dash-donut {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.dash-donut-inner {
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  background: var(--donut-inner-bg, var(--bg-panel));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--donut-ring-shadow, none);
+}
+
+.dash-donut-num {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.dash-donut-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.dash-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.dash-donut-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash-leg-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.supabase-status-dot--ok {
-  background: var(--accent-green);
-}
-.supabase-status-dot--error {
-  background: var(--danger-red);
-}
-.supabase-status-dot--loading {
-  background: var(--warning-orange);
-  animation: supabase-pulse 1s ease-in-out infinite;
-}
-@keyframes supabase-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-.supabase-status-retry {
+
+.dash-donut-legend strong {
   margin-left: auto;
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-panel);
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-.supabase-status-retry:hover {
-  background: var(--row-hover-bg);
+  font-weight: 800;
 }
 
-.reports-header-meta {
-  display: flex;
-  gap: var(--space-lg);
-  align-items: flex-end;
+.dash-chart-sub {
+  margin: 0 0 14px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-width: 52ch;
 }
 
-.summary-item .type-value {
-  font-size: 1.1rem;
-}
-
-.reports-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-  gap: var(--space-md);
-}
-
-.panel {
-  background: var(--bg-panel);
-  border: 1px solid var(--border-color);
-  padding: var(--space-lg);
-  backdrop-filter: blur(10px);
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-md);
-}
-
-.panel-title {
-  margin-top: 4px;
-  font-size: 1.05rem;
-  font-weight: 500;
-}
-
-.panel-table .table-wrapper {
-  width: 100%;
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-th,
-td {
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--border-color);
-  font-size: 0.85rem;
-}
-
-th {
-  font-size: 0.75rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-secondary);
-}
-
-tbody tr:last-child td {
-  border-bottom: none;
-}
-
-tbody tr:hover td {
-  background: var(--row-hover-bg);
-}
-
-.cell-employee {
-  font-weight: 500;
-}
-
-.cell-reason {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-}
-
-.cell-field-main {
-  font-weight: 500;
-}
-
-.cell-field-sub {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.cell-field-empty {
-  color: var(--text-secondary);
-}
-
-.cell-time,
-.cell-date {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
-}
-
-.cell-duration {
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-}
-
-.cell-notes {
-  max-width: 220px;
-  font-size: 0.875rem;
-}
-
-.cell-notes-text {
-  color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.cell-notes-empty {
-  color: var(--text-secondary);
-}
-
-.reason-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.reason-dot-breakdown {
-  background: var(--danger-red);
-}
-
-.reason-dot-rain {
-  background: #3c91d3;
-}
-
-.reason-dot-fuel {
-  background: var(--warning-orange);
-}
-
-.reason-dot-waiting {
-  background: #9ca3af;
-}
-
-.panel-chart {
+.dash-vchart {
   display: flex;
   flex-direction: column;
-  transition: box-shadow 0.25s ease;
-}
-.panel-chart:hover {
-  box-shadow: 0 8px 28px -6px rgba(0, 0, 0, 0.1);
+  gap: 14px;
 }
 
-.chart-layout {
+.dash-vchart-inner {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr);
-  gap: var(--space-lg);
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 6px 10px;
   align-items: stretch;
 }
 
-.donut-wrapper {
+.dash-vchart-y {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  text-align: right;
+  padding-bottom: 28px;
+  line-height: 1;
 }
 
-.donut-chart {
-  width: 200px;
-  height: 200px;
-  border-radius: 50%;
+.dash-vchart-plot {
   position: relative;
-  box-shadow: var(--donut-ring-shadow);
-  opacity: 0;
-  transform: scale(0.7);
-  animation: donutReveal 0.6s ease-out 0.2s forwards;
-  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  min-height: 200px;
+  border-left: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  padding: 4px 6px 0 10px;
 }
 
-.reports-donut {
-  position: relative;
-}
-
-.chart-wrapper-interactive[data-hover="breakdown"] .reports-donut {
-  box-shadow: 0 0 0 4px rgba(211, 60, 60, 0.35);
-  transform: scale(1.03);
-}
-.chart-wrapper-interactive[data-hover="rain"] .reports-donut {
-  box-shadow: 0 0 0 4px rgba(60, 145, 211, 0.35);
-  transform: scale(1.03);
-}
-.chart-wrapper-interactive[data-hover="fuel"] .reports-donut {
-  box-shadow: 0 0 0 4px rgba(211, 130, 60, 0.35);
-  transform: scale(1.03);
-}
-.chart-wrapper-interactive[data-hover="waiting"] .reports-donut {
-  box-shadow: 0 0 0 4px rgba(156, 163, 175, 0.4);
-  transform: scale(1.03);
-}
-
-@keyframes donutReveal {
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.donut-inner {
+.dash-vchart-hline {
   position: absolute;
-  inset: 32px;
-  border-radius: 50%;
-  background: var(--donut-inner-bg);
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--border-color) 70%, transparent);
+  pointer-events: none;
+}
+
+.dash-vchart-cols {
+  position: absolute;
+  left: 10px;
+  right: 6px;
+  top: 4px;
+  bottom: 26px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 16px;
+}
+
+.dash-vchart-col {
+  flex: 0 0 auto;
+  width: 56px;
+  min-width: 48px;
+  max-width: 72px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
+  height: 100%;
+}
+
+.dash-vchart-col-body {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
 }
 
-.donut-total {
-  font-size: 1.3rem;
-  font-weight: 600;
-}
-
-.donut-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.chart-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-  justify-content: space-between;
-}
-
-.legend {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  transition: background 0.2s ease, transform 0.2s ease;
-  border-radius: 8px;
-  padding: 6px 10px;
-  margin: 0 -10px;
-  cursor: default;
-}
-.legend-item-active {
-  background: var(--row-hover-bg);
-  transform: scale(1.02);
-}
-.legend-item-reveal {
-  opacity: 0;
-  transform: translateY(8px);
-  animation: legendReveal 0.4s ease-out var(--legend-delay, 0.35s) forwards;
-}
-.legend-item-reveal.legend-item-active {
-  transform: scale(1.02) translateY(0);
-}
-@keyframes legendReveal {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.legend-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.legend-color {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-
-.legend-breakdown {
-  background: var(--danger-red);
-}
-
-.legend-rain {
-  background: #3c91d3;
-}
-
-.legend-fuel {
-  background: var(--warning-orange);
-}
-
-.legend-waiting {
-  background: #9ca3af;
-}
-
-.legend-value {
+.dash-vchart-total {
+  font-size: 0.72rem;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
-  color: var(--text-secondary);
+  color: var(--text-primary);
+  line-height: 1;
 }
 
-.top-employees {
-  border-top: 1px solid var(--border-color);
-  padding-top: var(--space-md);
-}
-
-.top-list {
-  list-style: none;
-  padding: 0;
-  margin: var(--space-sm) 0 0;
+.dash-vchart-stack {
+  width: 100%;
+  max-width: 44px;
+  min-width: 16px;
+  border-radius: 8px 8px 2px 2px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-color) 80%, transparent);
+  transition: height 0.3s ease;
+}
+
+.dash-vchart-stack--done-only .dash-vchart-seg {
+  flex: 1;
+  min-height: 100%;
+}
+
+.dash-vchart-seg {
+  width: 100%;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.dash-vchart-seg--done {
+  background: #22c55e;
+}
+
+.dash-vchart-xlabel {
+  margin-top: 8px;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.dash-vchart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  padding-left: 44px;
+}
+
+.dash-vchart-legend span {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
 }
 
-.top-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  transition: background 0.2s ease;
-  border-radius: 6px;
-  padding: 4px 0;
-}
-.top-item:hover {
-  background: var(--row-hover-bg);
-}
-.top-item-reveal {
-  opacity: 0;
-  transform: translateX(-8px);
-  animation: topReveal 0.35s ease-out var(--top-delay, 0.6s) forwards;
-}
-@keyframes topReveal {
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.top-name {
-  color: var(--text-secondary);
-}
-
-.top-value {
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-}
-
-.show-all-btn {
-  margin-top: var(--space-md);
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background: var(--chip-bg);
-  color: var(--text-primary);
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
-}
-.show-all-btn:hover {
-  background: var(--row-hover-bg);
-  border-color: var(--agri-primary);
-}
-
-.legend-color-ops {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-
-.chart-wrapper-ops[data-hover] .reports-donut-ops {
-  transform: scale(1.03);
-}
-
-.empty-state {
-  padding: var(--space-md) 0;
-}
-
-.text-right {
-  text-align: right;
-}
-
-@media (max-width: 1100px) {
-  .reports-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 768px) {
-  .chart-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .reports-header-meta {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-md);
-  }
-
-  .panel-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-sm);
-  }
-
-  .summary-layout {
-    grid-template-columns: 1fr;
-  }
-}
 </style>
-

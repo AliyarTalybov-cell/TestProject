@@ -63,6 +63,26 @@ export type TaskEventRow = {
   created_at: string
 }
 
+/** Плейсхолдер «нет срока» в текстовом поле due_date. */
+const DUE_DATE_EMPTY_RE = /^[—\-–]+$/
+
+/**
+ * Приводит `tasks.due_date` (text) к `YYYY-MM-DD` для сравнения с фильтрами аналитики.
+ * В форме задач срок часто хранится как ДД.ММ.ГГГГ; также поддерживается ISO-префикс.
+ */
+export function taskDueDateToYmd(raw: string | null | undefined): string | null {
+  if (raw == null) return null
+  const trimmed = raw.trim()
+  if (!trimmed || DUE_DATE_EMPTY_RE.test(trimmed)) return null
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+  const dmY = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)
+  if (!dmY) return null
+  const day = String(parseInt(dmY[1], 10)).padStart(2, '0')
+  const month = String(parseInt(dmY[2], 10)).padStart(2, '0')
+  return `${dmY[3]}-${month}-${day}`
+}
+
 function initialsFromName(name: string, email: string): string {
   if (name && name.trim()) {
     const parts = name.trim().split(/\s+/)

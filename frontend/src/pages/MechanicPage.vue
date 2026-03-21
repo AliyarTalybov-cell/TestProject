@@ -12,6 +12,7 @@ import { loadDowntimeReasons, loadWorkOperations, isSupabaseConfigured } from '@
 import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperations'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
+import { upsertOperatorStatus, deleteOperatorStatus } from '@/lib/operatorStatusSupabase'
 import { useAuth } from '@/stores/auth'
 import { loadCalendarTasks, updateCalendarTask, type CalendarTaskRow } from '@/lib/calendarTasksSupabase'
 import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
@@ -173,6 +174,37 @@ onMounted(async () => {
       // оставляем дефолтные причины и пустой список операций
     }
   }
+
+  // Восстановление «живого» статуса в Supabase после перезагрузки страницы (дашборд руководителя).
+  const uid = auth.user.value?.id
+  if (uid && isSupabaseConfigured()) {
+    if (active.value) {
+      void upsertOperatorStatus({
+        userId: uid,
+        kind: 'downtime',
+        employee: active.value.employee,
+        startedAt: active.value.startISO,
+        fieldId: active.value.fieldId ?? null,
+        fieldName: active.value.fieldName ?? null,
+        operation: active.value.operation ?? null,
+        downtimeCategory: active.value.category,
+        downtimeReason: active.value.reason,
+        equipmentId: null,
+      })
+    } else if (activeOperation.value) {
+      const op = activeOperation.value
+      void upsertOperatorStatus({
+        userId: uid,
+        kind: 'operation',
+        employee: op.employee,
+        startedAt: op.startISO,
+        fieldId: op.fieldId ?? null,
+        fieldName: op.fieldName ?? null,
+        operation: op.operation ?? null,
+        equipmentId: op.equipmentId ?? null,
+      })
+    }
+  }
 })
 onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval)
@@ -266,6 +298,22 @@ function startDowntime(reason: { label: string; category: DowntimeCategory }) {
   saveActive(active.value)
   isReasonsOpen.value = false
   isStartedModalOpen.value = true
+
+  const uid = auth.user.value?.id
+  if (uid && isSupabaseConfigured() && active.value) {
+    void upsertOperatorStatus({
+      userId: uid,
+      kind: 'downtime',
+      employee: active.value.employee,
+      startedAt: active.value.startISO,
+      fieldId: active.value.fieldId ?? null,
+      fieldName: active.value.fieldName ?? null,
+      operation: active.value.operation ?? null,
+      downtimeCategory: active.value.category,
+      downtimeReason: active.value.reason,
+      equipmentId: null,
+    })
+  }
 }
 
 function openFinishNotesModal(type: 'downtime' | 'operation') {
@@ -331,6 +379,11 @@ function stopDowntimeWithNotes(notes?: string) {
 
   active.value = null
   saveActive(null)
+
+  const uid = auth.user.value?.id
+  if (uid && isSupabaseConfigured()) {
+    void deleteOperatorStatus(uid)
+  }
 }
 
 function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | null) {
@@ -375,11 +428,14 @@ function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | nul
   }
   // Диагностика: чтобы понять, что реально уходит в insertOperation.
   // В идеале equipmentFuelPercent/equipmentCondition* должны быть числами.
-  // eslint-disable-next-line no-console
-  console.debug('insertOperation payload (MechanicPage)', { op })
   saveActiveOperation(null)
   activeOperation.value = null
   workStartedAt.value = null
+
+  const uid = auth.user.value?.id
+  if (uid && isSupabaseConfigured()) {
+    void deleteOperatorStatus(uid)
+  }
 }
 
 function setCurrentField(id: string) {
@@ -483,6 +539,20 @@ function startOperationConfirmedWithoutEquipment() {
   saveActiveOperation(activeOperation.value)
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
+
+  const uid = auth.user.value?.id
+  if (uid && isSupabaseConfigured()) {
+    void upsertOperatorStatus({
+      userId: uid,
+      kind: 'operation',
+      employee: activeOperation.value.employee,
+      startedAt: startISO,
+      fieldId: activeOperation.value.fieldId ?? null,
+      fieldName: activeOperation.value.fieldName ?? null,
+      operation: activeOperation.value.operation ?? null,
+      equipmentId: activeOperation.value.equipmentId ?? null,
+    })
+  }
 }
 
 function startOperationConfirmedWithEquipment() {
@@ -510,6 +580,20 @@ function startOperationConfirmedWithEquipment() {
   isEquipmentModalOpen.value = false
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
+
+  const uid = auth.user.value?.id
+  if (uid && isSupabaseConfigured() && activeOperation.value) {
+    void upsertOperatorStatus({
+      userId: uid,
+      kind: 'operation',
+      employee: activeOperation.value.employee,
+      startedAt: startISO,
+      fieldId: activeOperation.value.fieldId ?? null,
+      fieldName: activeOperation.value.fieldName ?? null,
+      operation: activeOperation.value.operation ?? null,
+      equipmentId: activeOperation.value.equipmentId ?? null,
+    })
+  }
 }
 
 function closeEquipmentChoiceAndReturnToSheet() {

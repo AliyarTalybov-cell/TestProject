@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onActivated } from 'vue'
+import { useRoute } from 'vue-router'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import { useAuth } from '@/stores/auth'
@@ -37,6 +38,7 @@ interface AssigneeOption {
 type Task = TaskType
 
 const auth = useAuth()
+const route = useRoute()
 const viewMode = ref<ViewMode>('kanban')
 function dateToYyyyMmDd(d: Date): string {
   const y = d.getFullYear()
@@ -189,7 +191,33 @@ const statusColumns: { key: Status; title: string }[] = [
   { key: 'done', title: 'Выполнено' },
 ]
 
-onMounted(loadData)
+/** Параметры с страницы «Аналитика» (карточка задач по сроку). */
+function applyAnalyticsQueryParams() {
+  const q = route.query
+  if (q.due_upto === '1' && typeof q.due_to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q.due_to)) {
+    filterDateFrom.value = ''
+    dateFromInput.value = ''
+    filterDateTo.value = q.due_to
+    dateToInput.value = q.due_to
+  } else {
+    if (typeof q.due_from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q.due_from)) {
+      filterDateFrom.value = q.due_from
+      dateFromInput.value = q.due_from
+    }
+    if (typeof q.due_to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q.due_to)) {
+      filterDateTo.value = q.due_to
+      dateToInput.value = q.due_to
+    }
+  }
+  if (q.kpi_completed_due === '1') {
+    filterStatus.value = 'done'
+  }
+}
+
+onMounted(() => {
+  applyAnalyticsQueryParams()
+  loadData()
+})
 onActivated(loadData)
 
 const form = ref({
@@ -204,7 +232,16 @@ const form = ref({
 
 function parseDueDate(dueDate: string): Date | null {
   if (!dueDate || dueDate === '—') return null
-  const m = dueDate.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)
+  const trimmed = dueDate.trim()
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (iso) {
+    const y = parseInt(iso[1], 10)
+    const mo = parseInt(iso[2], 10) - 1
+    const day = parseInt(iso[3], 10)
+    const d = new Date(y, mo, day)
+    return isNaN(d.getTime()) ? null : d
+  }
+  const m = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/)
   if (!m) return null
   const [, day, month, year] = m
   const d = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10))
