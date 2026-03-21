@@ -435,28 +435,95 @@ a {
   border-top: 1px solid var(--sidebar-border);
 }
 
-.sidebar-logout-btn {
+/* Кнопка «Выйти» в сайдбаре (Uiverse / vinodjangid07), масштаб −12% */
+.app-logout-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.875rem;
-  color: var(--sidebar-text);
-  background: none;
+  justify-content: flex-start;
+  width: calc(45px * 0.88);
+  height: calc(45px * 0.88);
   border: none;
-  padding: 0;
-  cursor: pointer;
-}
-
-.sidebar-logout-btn:hover {
-  color: var(--text-primary);
-}
-
-.sidebar-status-dot {
-  width: 8px;
-  height: 8px;
   border-radius: 50%;
-  background: #ef4444;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition-duration: 0.3s;
+  box-shadow: calc(2px * 0.88) calc(2px * 0.88) calc(10px * 0.88) rgba(0, 0, 0, 0.199);
+  background-color: rgb(255, 65, 65);
+  padding: 0;
   flex-shrink: 0;
+  font-size: calc(14px * 0.88);
+  font-family: inherit;
+}
+
+.app-logout-sign {
+  width: 100%;
+  transition-duration: 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-logout-sign svg {
+  width: calc(17px * 0.88);
+  height: calc(17px * 0.88);
+  flex-shrink: 0;
+}
+
+.app-logout-sign svg path {
+  fill: white;
+}
+
+.app-logout-text {
+  position: absolute;
+  right: 0;
+  width: 0;
+  opacity: 0;
+  color: white;
+  font-size: 1.2em;
+  font-weight: 600;
+  transition-duration: 0.3s;
+  white-space: nowrap;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  top: 0;
+  box-sizing: border-box;
+}
+
+.app-logout-btn:hover {
+  width: calc(125px * 0.88);
+  border-radius: calc(40px * 0.88);
+  transition-duration: 0.3s;
+}
+
+.app-logout-btn:hover .app-logout-sign {
+  width: 30%;
+  transition-duration: 0.3s;
+  padding-left: calc(20px * 0.88);
+  box-sizing: border-box;
+}
+
+.app-logout-btn:hover .app-logout-text {
+  opacity: 1;
+  width: 70%;
+  transition-duration: 0.3s;
+  padding-right: calc(10px * 0.88);
+}
+
+.app-logout-btn:active {
+  transform: translate(calc(2px * 0.88), calc(2px * 0.88));
+}
+
+.app-logout-btn:focus-visible {
+  outline: calc(2px * 0.88) solid color-mix(in srgb, rgb(255, 65, 65) 65%, white);
+  outline-offset: calc(3px * 0.88);
+}
+
+[data-theme='dark'] .app-logout-btn {
+  box-shadow: calc(2px * 0.88) calc(2px * 0.88) calc(14px * 0.88) rgba(0, 0, 0, 0.35);
 }
 
 .main-content {
