@@ -64,6 +64,8 @@ export type ChatMessageRow = {
   thread_id: string
   sender_id: string
   body: string | null
+  attachment_bucket: string | null
+  attachment_path: string | null
   attachment_name: string | null
   attachment_size: number | null
   created_at: string
@@ -76,7 +78,7 @@ export type UiChatMessage = {
   text?: string
   time: string
   read?: boolean
-  attachment?: { name: string; size: string }
+  attachment?: { name: string; size: string; url?: string }
   createdAt: string
   /** В группе — аватар отправителя входящих */
   inAvatarInitials?: string
@@ -216,11 +218,26 @@ export async function refreshChatTotalUnread(): Promise<void> {
   chatTotalUnread.value = typeof data === 'number' ? data : Number(data ?? 0)
 }
 
+/** Бакет для вложений в чате (миграция add_chat_attachments_storage) */
+export const CHAT_ATTACHMENTS_BUCKET = 'chat-attachments'
+
+/** Лимит размера файла на клиенте (сервер: file_size_limit в бакете) */
+export const CHAT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+
+export function getChatAttachmentPublicUrl(bucket: string | null | undefined, path: string | null | undefined): string | undefined {
+  if (!supabase || !path) return undefined
+  const b = bucket?.trim() || CHAT_ATTACHMENTS_BUCKET
+  const { data } = supabase.storage.from(b).getPublicUrl(path)
+  return data.publicUrl
+}
+
 export async function fetchThreadMessages(threadId: string): Promise<ChatMessageRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('chat_messages')
-    .select('id, thread_id, sender_id, body, attachment_name, attachment_size, created_at')
+    .select(
+      'id, thread_id, sender_id, body, attachment_bucket, attachment_path, attachment_name, attachment_size, created_at',
+    )
     .eq('thread_id', threadId)
     .order('created_at', { ascending: true })
   if (error) throw error
@@ -264,10 +281,15 @@ export function mapMessagesForUi(
 ): UiChatMessage[] {
   return rows.map((m) => {
     const out = m.sender_id === myUserId
-    const att =
-      m.attachment_name
-        ? { name: m.attachment_name, size: formatBytes(m.attachment_size) }
-        : undefined
+    const att = m.attachment_name
+      ? {
+          name: m.attachment_name,
+          size: formatBytes(m.attachment_size),
+          ...(m.attachment_path
+            ? { url: getChatAttachmentPublicUrl(m.attachment_bucket, m.attachment_path) }
+            : {}),
+        }
+      : undefined
     let read: boolean | undefined
     if (out && peerLastReadAt) {
       read = new Date(peerLastReadAt) >= new Date(m.created_at)
@@ -335,6 +357,56 @@ export async function sendChatMessage(threadId: string, body: string): Promise<v
     body: trimmed,
   })
   if (error) throw error
+}
+
+function sanitizeChatFileName(name: string): string {
+  const base = name
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}._-]/gu, '_')
+    .slice(0, 180)
+  return base || 'file'
+}
+
+/**
+ * Загрузка файла в Storage и сообщение в чат (текст опционален — подпись к файлу).
+ */
+export async function sendChatMessageWithFile(threadId: string, file: File, body?: string): Promise<void> {
+  if (!supabase) throw new Error('Нет подключения')
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) throw new Error('Требуется вход')
+  if (!file || file.size <= 0) throw new Error('Выберите файл')
+  if (file.size > CHAT_ATTACHMENT_MAX_BYTES) {
+    throw new Error(`Файл больше ${Math.round(CHAT_ATTACHMENT_MAX_BYTES / (1024 * 1024))} МБ`)
+  }
+  const caption = body?.trim() || null
+  const safe = sanitizeChatFileName(file.name)
+  const objectPath = `${threadId}/${user.id}/${crypto.randomUUID()}_${safe}`
+
+  const { error: upErr } = await supabase.storage.from(CHAT_ATTACHMENTS_BUCKET).upload(objectPath, file, {
+    cacheControl: '3600',
+    upsert: false,
+  })
+  if (upErr) throw upErr
+
+  const { error } = await supabase.from('chat_messages').insert({
+    thread_id: threadId,
+    sender_id: user.id,
+    body: caption,
+    attachment_bucket: CHAT_ATTACHMENTS_BUCKET,
+    attachment_path: objectPath,
+    attachment_name: file.name,
+    attachment_size: file.size,
+  })
+  if (error) {
+    try {
+      await supabase.storage.from(CHAT_ATTACHMENTS_BUCKET).remove([objectPath])
+    } catch {
+      /* ignore */
+    }
+    throw error
+  }
 }
 
 export async function getOrCreateDmThread(otherUserId: string): Promise<string> {

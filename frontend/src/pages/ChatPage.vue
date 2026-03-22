@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import { useAuth } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 import { formatSupabaseError } from '@/lib/formatSupabaseError'
@@ -21,6 +21,7 @@ import {
   markThreadAsRead,
   refreshChatTotalUnread,
   sendChatMessage,
+  sendChatMessageWithFile,
   subscribeToThreadMessages,
   fetchGroupThreadMembersDisplay,
   presenceFromLastActivity,
@@ -51,6 +52,9 @@ const filterTab = ref<ChatFilterTab>('all')
 const searchLocal = ref('')
 const messages = ref<UiChatMessage[]>([])
 const draft = ref('')
+const pendingAttachment = ref<File | null>(null)
+const attachBusy = ref(false)
+const fileInputRef = useTemplateRef<HTMLInputElement>('chatFileInput')
 
 const groupMembers = ref<GroupMemberDisplay[]>([])
 const groupMembersLoading = ref(false)
@@ -215,6 +219,8 @@ function startRealtime() {
 async function onPick(c: UiChatConversation) {
   if (!configured.value) return
   error.value = null
+  pendingAttachment.value = null
+  if (fileInputRef.value) fileInputRef.value.value = ''
   if (c.kind !== 'group') {
     groupMembers.value = []
     groupMembersLoading.value = false
@@ -261,23 +267,53 @@ async function refreshChat() {
 }
 
 async function onSend() {
-  if (!activeId.value || !draft.value.trim()) return
+  if (!activeId.value) return
+  const text = draft.value.trim()
+  const file = pendingAttachment.value
+  if (!file && !text) return
   error.value = null
+  attachBusy.value = true
   try {
-    await sendChatMessage(activeId.value, draft.value)
-    draft.value = ''
+    if (file) {
+      await sendChatMessageWithFile(activeId.value, file, text || undefined)
+      pendingAttachment.value = null
+      if (fileInputRef.value) fileInputRef.value.value = ''
+      draft.value = ''
+    } else {
+      await sendChatMessage(activeId.value, draft.value)
+      draft.value = ''
+    }
     await reloadMessages()
     await refreshThreads()
     await refreshChatTotalUnread()
   } catch (e) {
     error.value = formatSupabaseError(e) || 'Не удалось отправить'
+  } finally {
+    attachBusy.value = false
   }
+}
+
+function triggerAttachmentPick() {
+  if (chatLoading.value || attachBusy.value) return
+  fileInputRef.value?.click()
+}
+
+function onAttachmentInputChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  if (!f) return
+  pendingAttachment.value = f
+}
+
+function clearPendingAttachment() {
+  pendingAttachment.value = null
+  if (fileInputRef.value) fileInputRef.value.value = ''
 }
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
-    void onSend()
+    if (!attachBusy.value) void onSend()
   }
 }
 
@@ -644,18 +680,6 @@ onUnmounted(() => {
                 <path d="M16 16h5v5" />
               </svg>
             </button>
-            <button type="button" class="chat-page__icon-btn" title="Поиск по чату" aria-label="Поиск по чату">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8" />
-                <path d="m21 21-4.3-4.3" />
-              </svg>
-            </button>
-            <button type="button" class="chat-page__icon-btn" title="Информация" aria-label="Информация о диалоге">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 16v-4M12 8h.01" />
-              </svg>
-            </button>
           </div>
         </header>
 
@@ -734,10 +758,32 @@ onUnmounted(() => {
               <div v-if="block.msg.text" class="chat-page__bubble" :class="block.msg.side === 'out' ? 'chat-page__bubble--out' : 'chat-page__bubble--in'">
                 <p>{{ block.msg.text }}</p>
               </div>
-              <div
-                v-if="block.msg.attachment"
+              <a
+                v-if="block.msg.attachment?.url"
+                :href="block.msg.attachment.url"
                 class="chat-page__attach"
                 :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
+                target="_blank"
+                rel="noopener noreferrer"
+                :download="block.msg.attachment.name"
+              >
+                <div class="chat-page__attach-icon" aria-hidden="true">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M7 21h10a2 2 0 0 0 2-2V9.414a1 1 0 0 0-.293-.707l-5.414-5.414A1 1 0 0 0 12.586 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2z" />
+                  </svg>
+                </div>
+                <div class="chat-page__attach-meta">
+                  <p class="chat-page__attach-name">{{ block.msg.attachment.name }}</p>
+                  <p class="chat-page__attach-size">{{ block.msg.attachment.size }}</p>
+                  <p class="chat-page__attach-hint">Скачать</p>
+                </div>
+              </a>
+              <div
+                v-else-if="block.msg.attachment"
+                class="chat-page__attach"
+                :class="block.msg.side === 'out' ? 'chat-page__attach--out' : ''"
+                role="group"
+                :aria-label="`Вложение: ${block.msg.attachment.name}`"
               >
                 <div class="chat-page__attach-icon" aria-hidden="true">
                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -778,8 +824,29 @@ onUnmounted(() => {
             </div>
 
             <footer class="chat-page__composer-wrap">
-              <div class="chat-page__composer">
-            <button type="button" class="chat-page__composer-icon" title="Прикрепить файл" aria-label="Прикрепить файл" :disabled="chatLoading">
+              <input
+                ref="chatFileInput"
+                type="file"
+                class="chat-page__file-input-hidden"
+                tabindex="-1"
+                aria-hidden="true"
+                @change="onAttachmentInputChange"
+              />
+              <div v-if="pendingAttachment" class="chat-page__pending-file" role="status">
+                <span class="chat-page__pending-file-name" :title="pendingAttachment.name">{{ pendingAttachment.name }}</span>
+                <button type="button" class="chat-page__pending-file-remove" aria-label="Убрать файл" :disabled="attachBusy" @click="clearPendingAttachment">
+                  ×
+                </button>
+              </div>
+              <div class="chat-page__composer" :class="{ 'chat-page__composer--busy': attachBusy }">
+            <button
+              type="button"
+              class="chat-page__composer-icon"
+              title="Прикрепить файл"
+              aria-label="Прикрепить файл"
+              :disabled="chatLoading || attachBusy"
+              @click="triggerAttachmentPick"
+            >
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M15.172 7 8.586 13.586a2 2 0 1 0 2.828 2.828l6.414-6.586a4 4 0 1 0-5.656-5.656l-6.415 6.585a6 6 0 1 0 8.486 8.486L20.5 13" />
               </svg>
@@ -788,25 +855,27 @@ onUnmounted(() => {
               v-model="draft"
               class="chat-page__textarea"
               rows="1"
-              :placeholder="composerPlaceholder"
-              :disabled="chatLoading"
+              :placeholder="pendingAttachment ? 'Подпись к файлу (необязательно)…' : composerPlaceholder"
+              :disabled="chatLoading || attachBusy"
               @keydown="onKeydown"
             />
             <div class="chat-page__composer-right">
-              <button type="button" class="chat-page__composer-icon" title="Эмодзи" aria-label="Эмодзи" :disabled="chatLoading">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" />
-                </svg>
-              </button>
-              <button type="button" class="chat-page__send" aria-label="Отправить" :disabled="chatLoading" @click="onSend">
+              <button
+                type="button"
+                class="chat-page__send"
+                aria-label="Отправить"
+                :disabled="chatLoading || attachBusy || (!pendingAttachment && !draft.trim())"
+                @click="onSend"
+              >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                 </svg>
               </button>
             </div>
               </div>
-              <p class="chat-page__hint">Нажмите Enter для отправки, Shift+Enter для переноса</p>
+              <p class="chat-page__hint">
+                Нажмите Enter для отправки, Shift+Enter для переноса. Файл до 10 МБ — скрепка, затем «Отправить».
+              </p>
             </footer>
             </div>
           </template>
@@ -1630,6 +1699,11 @@ onUnmounted(() => {
   border-top-right-radius: 4px;
 }
 
+a.chat-page__attach {
+  text-decoration: none;
+  color: inherit;
+}
+
 .chat-page__attach {
   display: flex;
   align-items: center;
@@ -1686,6 +1760,13 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
+.chat-page__attach-hint {
+  margin: 4px 0 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--accent-green);
+}
+
 .chat-page__msg-foot {
   display: flex;
   align-items: center;
@@ -1711,6 +1792,59 @@ onUnmounted(() => {
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
   background: var(--bg-panel);
+  position: relative;
+}
+
+.chat-page__file-input-hidden {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.chat-page__pending-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-green) 12%, var(--chip-bg));
+  border: 1px solid color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+}
+
+.chat-page__pending-file-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-page__pending-file-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: var(--row-hover-bg);
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-page__pending-file-remove:hover:not(:disabled) {
+  background: var(--border-color);
+  color: var(--text-primary);
 }
 
 .chat-page__textarea:disabled,
@@ -1736,6 +1870,11 @@ onUnmounted(() => {
 .chat-page__composer:focus-within {
   border-color: var(--accent-green);
   box-shadow: 0 0 0 1px var(--accent-green);
+}
+
+.chat-page__composer--busy {
+  opacity: 0.75;
+  pointer-events: none;
 }
 
 .chat-page__composer-icon {
