@@ -24,6 +24,8 @@ import {
   type TaskRow,
 } from '@/lib/tasksSupabase'
 import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
+import { loadEmployees, loadPositions, searchEmployees, type EmployeeRow, type PositionRow } from '@/lib/employeesSupabase'
+import { getOrCreateDmThread, sendChatMessage, sendChatMessageWithFile } from '@/lib/chatSupabase'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
@@ -92,6 +94,7 @@ type MechanicField = {
   id: string
   name: string
   operation: string
+  area: number | null
 }
 
 const active = ref<ActiveDowntime | null>(loadActive())
@@ -115,6 +118,7 @@ const pendingStartOperation = ref<{
   taskId?: string | null
   taskTitle?: string | null
   taskNumber?: number | null
+  plannedHectares?: number | null
 } | null>(null)
 
 type EquipmentConditionBucket = 'good' | 'acceptable' | 'partial' | 'bad'
@@ -148,6 +152,7 @@ const equipmentConditionRequiresNotes = computed(() => equipmentConditionBucket.
 const finishNotesModalOpen = ref(false)
 const finishNotesType = ref<'downtime' | 'operation' | null>(null)
 const finishNotesText = ref('')
+const finishProcessedHectares = ref<number>(0)
 
 // Для операций с техникой: сколько топлива осталось у техники (после остановки)
 const equipmentFuelLeftPercent = ref<number>(0)
@@ -157,9 +162,12 @@ const operatorNoteSaving = ref(false)
 const shouldAskEquipmentFuelLeft = computed(
   () => finishNotesType.value === 'operation' && !!activeOperation.value?.equipmentId,
 )
+const shouldAskProcessedHectares = computed(() => finishNotesType.value === 'operation')
 
 const newFieldName = ref('')
 const newFieldOperation = ref('')
+const startPlannedHectares = ref<number | null>(null)
+const startOperationPlanError = ref<string | null>(null)
 
 const fields = ref<MechanicField[]>([])
 const currentFieldId = ref<string | null>(active.value?.fieldId ?? null)
@@ -182,6 +190,20 @@ const reasons = ref<Array<{ label: string; description: string; category: Downti
 const workOperationsList = ref<WorkOperationRow[]>([])
 const operationHistory = ref(loadOperations())
 const downtimeHistory = ref(loadDowntimeEvents())
+
+const issueReportText = ref('')
+const issueReportFile = ref<File | null>(null)
+const issueReportError = ref<string | null>(null)
+const issueReportSuccess = ref<string | null>(null)
+const issueReportBusy = ref(false)
+const issueFileInputRef = ref<HTMLInputElement | null>(null)
+const issueDispatcherModalOpen = ref(false)
+const issueDispatchersLoading = ref(false)
+const issueDispatchers = ref<EmployeeRow[]>([])
+const issuePositions = ref<PositionRow[]>([])
+const issuePositionFilter = ref<string>('')
+const issueSearch = ref('')
+const selectedIssueRecipientIds = ref<string[]>([])
 
 function refreshShiftHistory() {
   operationHistory.value = loadOperations()
@@ -207,6 +229,7 @@ onMounted(async () => {
         id: f.id,
         name: (f.name || '').trim() || `Поле №${f.number}`,
         operation: 'Операция не выбрана',
+        area: Number.isFinite(Number(f.area)) ? Number(f.area) : null,
       }))
       if (!currentFieldId.value && fields.value.length) {
         currentFieldId.value = fields.value[0].id
@@ -324,6 +347,7 @@ const statusText = computed(() => {
 const isOperationPaused = computed(() => !!activeOperation.value?.pausedAt)
 const isFieldLocked = computed(() => !!active.value || !!workStartedAt.value)
 const hasActiveTaskOperation = computed(() => !!activeOperation.value?.taskId)
+const hasActiveEquipmentOperation = computed(() => !!activeOperation.value?.equipmentId)
 const activeTaskLabel = computed(() => {
   const op = activeOperation.value
   if (!op?.taskId) return 'Операция без задачи'
@@ -433,9 +457,64 @@ const circleTaskLabel = computed(
 )
 
 const taskTitle = computed(() => `${circleFieldLabel.value} — ${circleTaskLabel.value}`)
-const progressPercent = 65
-const progressDone = 32
-const progressTotal = 50
+const progressTotal = computed(() => {
+  const area = currentField.value?.area
+  if (!Number.isFinite(area) || !area || area <= 0) return 0
+  return area
+})
+const progressDone = computed(() => {
+  const planned = activeOperation.value?.plannedHectares
+  if (!Number.isFinite(planned) || !planned || planned <= 0) return 0
+  if (!workStartedAt.value || active.value) return 0
+  const elapsed = operationElapsedSeconds(Date.now())
+  const progressByTime = (Number(planned) * elapsed) / (3 * 3600)
+  return Math.max(0, Math.min(Number(planned), Math.round(progressByTime * 10) / 10))
+})
+const progressPercent = computed(() => {
+  const planned = Number(activeOperation.value?.plannedHectares ?? 0)
+  if (!Number.isFinite(planned) || planned <= 0) return 0
+  return Math.max(0, Math.min(100, Math.round((progressDone.value / planned) * 100)))
+})
+
+function formatHectares(value: number | null | undefined): string {
+  if (!Number.isFinite(value ?? NaN)) return '—'
+  const n = Number(value)
+  return Number.isInteger(n) ? String(n) : n.toFixed(1)
+}
+
+const pendingFieldArea = computed<number | null>(() => {
+  const fieldId = pendingStartOperation.value?.fieldId
+  if (!fieldId) return currentField.value?.area ?? null
+  return fields.value.find((f) => f.id === fieldId)?.area ?? null
+})
+
+function setDefaultPlannedHectares() {
+  const area = pendingFieldArea.value
+  if (Number.isFinite(area ?? NaN) && (area ?? 0) > 0) {
+    startPlannedHectares.value = Number(area)
+  } else {
+    startPlannedHectares.value = null
+  }
+}
+
+function validatePlannedHectares(): number | null {
+  const area = pendingFieldArea.value
+  const planned = Number(startPlannedHectares.value)
+  if (!Number.isFinite(area ?? NaN) || (area ?? 0) <= 0) {
+    startOperationPlanError.value = 'Для выбранного поля не задана площадь. Укажите площадь поля в карточке поля.'
+    return null
+  }
+  if (!Number.isFinite(planned) || planned <= 0) {
+    startOperationPlanError.value = 'Укажите план работ в гектарах.'
+    return null
+  }
+  if (planned > Number(area)) {
+    startOperationPlanError.value = `План не может быть больше площади поля (${formatHectares(area)} Га).`
+    return null
+  }
+  startOperationPlanError.value = null
+  return Math.round(planned * 10) / 10
+}
 
 function priorityLabel(priority: string): string {
   return priority === 'high' ? 'Высокий' : priority === 'low' ? 'Низкий' : 'Обычный'
@@ -522,11 +601,18 @@ function openFinishNotesModal(type: 'downtime' | 'operation') {
   finishNotesType.value = type
   finishNotesText.value = ''
   equipmentFuelLeftPercent.value = 0
+  finishProcessedHectares.value = 0
   if (type === 'operation' && activeOperation.value?.equipmentId) {
     // По умолчанию ставим то, что было при старте операции.
     equipmentFuelLeftPercent.value = typeof activeOperation.value.equipmentFuelPercent === 'number'
       ? Math.round(activeOperation.value.equipmentFuelPercent)
       : 0
+  }
+  if (type === 'operation') {
+    const live = progressDone.value
+    const planned = Number(activeOperation.value?.plannedHectares ?? 0)
+    const initValue = Math.max(0, Math.min(planned || live, live || planned || 0))
+    finishProcessedHectares.value = Math.round(initValue * 10) / 10
   }
   finishNotesModalOpen.value = true
 }
@@ -536,6 +622,7 @@ function closeFinishNotesModal() {
   finishNotesType.value = null
   finishNotesText.value = ''
   equipmentFuelLeftPercent.value = 0
+  finishProcessedHectares.value = 0
 }
 
 function confirmFinishNotes(notes: string | null) {
@@ -543,12 +630,14 @@ function confirmFinishNotes(notes: string | null) {
   const notesVal = notes?.trim() || undefined
   const fuelLeft =
     type === 'operation' && activeOperation.value?.equipmentId ? equipmentFuelLeftPercent.value : undefined
+  const processed =
+    type === 'operation' ? Math.max(0, Math.round(Number(finishProcessedHectares.value || 0) * 10) / 10) : undefined
   closeFinishNotesModal()
   if (type === 'downtime') {
     stopDowntimeWithNotes(notesVal)
     isFinishedModalType.value = 'downtime'
   } else if (type === 'operation') {
-    stopOperationWithNotes(notesVal, fuelLeft)
+    stopOperationWithNotes(notesVal, fuelLeft, processed)
     isFinishedModalType.value = 'operation'
   }
   finishNotesText.value = ''
@@ -589,7 +678,7 @@ function stopDowntimeWithNotes(notes?: string) {
   }
 }
 
-function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | null) {
+function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | null, processedHectares?: number | null) {
   if (!workStartedAt.value) return
   const now = new Date()
   const durationMinutes = Math.max(1, Math.round(operationElapsedSeconds(now.getTime()) / 60))
@@ -627,6 +716,8 @@ function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | nul
     equipmentConditionValue: equipmentConditionValueFinal ?? null,
     equipmentConditionLabel: equipmentConditionLabelFinal ?? null,
     equipmentRepairNotes: equipmentRepairNotesFinal ?? null,
+    plannedHectares: savedOp?.plannedHectares ?? null,
+    processedHectares: processedHectares ?? null,
   }
   appendOperation(op)
   refreshShiftHistory()
@@ -689,6 +780,8 @@ function startOperation(field: MechanicField) {
     fieldName: field.name,
     operation: field.operation,
   }
+  setDefaultPlannedHectares()
+  startOperationPlanError.value = null
   isOperationsOpen.value = false
   isEquipmentChoiceOpen.value = true
 }
@@ -703,6 +796,8 @@ function startOperationByName(op: WorkOperationRow) {
     taskTitle: null,
     taskNumber: null,
   }
+  setDefaultPlannedHectares()
+  startOperationPlanError.value = null
   isOperationsOpen.value = false
   isEquipmentChoiceOpen.value = true
 }
@@ -720,6 +815,8 @@ function startOperationByTask(task: TaskRow) {
     taskTitle: task.title,
     taskNumber: task.number,
   }
+  setDefaultPlannedHectares()
+  startOperationPlanError.value = null
   isOperationsOpen.value = false
   isEquipmentChoiceOpen.value = true
 }
@@ -771,6 +868,7 @@ async function openEquipmentModal() {
   // Если бекенд не настроен или техник нет — всё равно показываем UI и позволяем заполнить параметры,
   // но без сохранения equipment_id.
   resetEquipmentForm()
+  startOperationPlanError.value = null
   isEquipmentChoiceOpen.value = false
   isEquipmentModalOpen.value = true
 
@@ -807,6 +905,8 @@ watch(conditionPercent, () => {
 function startOperationConfirmedWithoutEquipment() {
   const pending = pendingStartOperation.value
   if (!pending) return
+  const plannedHectares = validatePlannedHectares()
+  if (plannedHectares == null) return
   const startISO = new Date().toISOString()
   workStartedAt.value = startISO
   activeOperation.value = {
@@ -826,12 +926,14 @@ function startOperationConfirmedWithoutEquipment() {
     equipmentConditionValue: null,
     equipmentConditionLabel: null,
     equipmentRepairNotes: null,
+    plannedHectares,
   }
   saveActiveOperation(activeOperation.value)
   operatorNoteDraft.value = ''
   void markTaskOperationStarted(pending.taskId)
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
+  startOperationPlanError.value = null
 
   const uid = auth.user.value?.id
   if (uid && isSupabaseConfigured()) {
@@ -851,6 +953,8 @@ function startOperationConfirmedWithoutEquipment() {
 function startOperationConfirmedWithEquipment() {
   const pending = pendingStartOperation.value
   if (!pending) return
+  const plannedHectares = validatePlannedHectares()
+  if (plannedHectares == null) return
   const equipmentId = selectedEquipmentId.value
   if (!equipmentId) return
   if (equipmentConditionRequiresNotes.value && !equipmentRepairNotes.value.trim()) return
@@ -874,6 +978,7 @@ function startOperationConfirmedWithEquipment() {
     equipmentConditionValue: Math.round(conditionPercent.value),
     equipmentConditionLabel: equipmentConditionLabel.value,
     equipmentRepairNotes: equipmentConditionRequiresNotes.value ? equipmentRepairNotes.value.trim() : null,
+    plannedHectares,
   }
   saveActiveOperation(activeOperation.value)
   operatorNoteDraft.value = ''
@@ -881,6 +986,7 @@ function startOperationConfirmedWithEquipment() {
   isEquipmentModalOpen.value = false
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
+  startOperationPlanError.value = null
 
   const uid = auth.user.value?.id
   if (uid && isSupabaseConfigured() && activeOperation.value) {
@@ -944,15 +1050,147 @@ async function saveOperatorNote() {
   }
 }
 
+const issueCanSubmit = computed(() => issueReportText.value.trim().length > 0 || !!issueReportFile.value)
+const issuePositionFilterValue = computed(() => issuePositionFilter.value || null)
+const issueCanSendNow = computed(() => selectedIssueRecipientIds.value.length > 0)
+
+function openIssueFilePicker() {
+  issueFileInputRef.value?.click()
+}
+
+function onIssueFilePicked(event: Event) {
+  const input = event.target as HTMLInputElement | null
+  const file = input?.files?.[0] ?? null
+  issueReportFile.value = file
+  issueReportError.value = null
+  if (input) input.value = ''
+}
+
+function removeIssueFile() {
+  issueReportFile.value = null
+}
+
+function formatIssueFileSize(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+async function openIssueDispatcherPicker() {
+  issueReportError.value = null
+  issueReportSuccess.value = null
+  if (!issueCanSubmit.value) {
+    issueReportError.value = 'Добавьте описание проблемы или файл.'
+    return
+  }
+  issueDispatcherModalOpen.value = true
+  if (!issuePositions.value.length) {
+    try {
+      issuePositions.value = await loadPositions()
+    } catch {
+      issuePositions.value = []
+    }
+  }
+  await loadIssueRecipients()
+}
+
+function closeIssueDispatcherPicker() {
+  if (issueReportBusy.value) return
+  issueDispatcherModalOpen.value = false
+}
+
+async function submitIssueToDispatcher() {
+  if (issueReportBusy.value) return
+  const recipientIds = selectedIssueRecipientIds.value
+  if (!recipientIds.length) {
+    issueReportError.value = 'Выберите хотя бы одного получателя.'
+    return
+  }
+  const message = issueReportText.value.trim()
+  if (!message && !issueReportFile.value) {
+    issueReportError.value = 'Добавьте описание проблемы или файл.'
+    return
+  }
+  issueReportBusy.value = true
+  issueReportError.value = null
+  issueReportSuccess.value = null
+  try {
+    const op = activeOperation.value
+    const headline = '[ВАЖНО] Сообщение о проблеме'
+    const contextLines = [
+      op?.fieldName ? `Поле: ${op.fieldName}` : null,
+      op?.operation ? `Операция: ${op.operation}` : null,
+      op?.equipmentId ? `Техника: ${activeEquipmentLabel.value}` : null,
+      op?.taskTitle ? `Задача: ${activeTaskLabel.value}` : null,
+    ].filter(Boolean) as string[]
+    const payloadText = [headline, message || null, contextLines.length ? contextLines.join('\n') : null]
+      .filter(Boolean)
+      .join('\n\n')
+
+    for (const recipientId of recipientIds) {
+      const threadId = await getOrCreateDmThread(recipientId)
+      if (issueReportFile.value) {
+        await sendChatMessageWithFile(threadId, issueReportFile.value, payloadText, {
+          urgent: true,
+          urgentKind: 'problem_report',
+        })
+      } else {
+        await sendChatMessage(threadId, payloadText, {
+          urgent: true,
+          urgentKind: 'problem_report',
+        })
+      }
+    }
+
+    issueReportText.value = ''
+    issueReportFile.value = null
+    issueDispatcherModalOpen.value = false
+    issueReportSuccess.value = `Отправлено (${recipientIds.length}) как важное сообщение.`
+    selectedIssueRecipientIds.value = []
+  } catch (e) {
+    issueReportError.value = e instanceof Error ? e.message : 'Не удалось отправить сообщение получателям'
+  } finally {
+    issueReportBusy.value = false
+  }
+}
+
+async function loadIssueRecipients() {
+  issueDispatchersLoading.value = true
+  try {
+    const search = issueSearch.value.trim()
+    const byPosition = issuePositionFilterValue.value
+    const rows = search
+      ? await searchEmployees(search, 200, byPosition)
+      : await loadEmployees(200, byPosition)
+    const me = auth.user.value?.id ?? ''
+    issueDispatchers.value = rows.filter((r) => r.id !== me)
+  } catch (e) {
+    issueReportError.value = e instanceof Error ? e.message : 'Не удалось загрузить список сотрудников'
+    issueDispatchers.value = []
+  } finally {
+    issueDispatchersLoading.value = false
+  }
+}
+
+function toggleIssueRecipient(id: string) {
+  if (selectedIssueRecipientIds.value.includes(id)) {
+    selectedIssueRecipientIds.value = selectedIssueRecipientIds.value.filter((x) => x !== id)
+  } else {
+    selectedIssueRecipientIds.value = [...selectedIssueRecipientIds.value, id]
+  }
+}
+
 function closeEquipmentChoiceAndReturnToSheet() {
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
+  startOperationPlanError.value = null
   isOperationsOpen.value = true
 }
 
 function backFromEquipmentModalToChoice() {
   isEquipmentModalOpen.value = false
   isEquipmentChoiceOpen.value = true
+  startOperationPlanError.value = null
 }
 
 
@@ -971,6 +1209,7 @@ function addField() {
     id,
     name,
     operation: op,
+    area: null,
   }
   fields.value = [...fields.value, field]
   currentFieldId.value = id
@@ -1018,7 +1257,15 @@ function addField() {
             <div class="operator-progress-head">
               <div>
                 <div class="operator-progress-title">Прогресс выполнения</div>
-                <div class="operator-progress-meta">Обработано {{ progressDone }} из {{ progressTotal }} Га</div>
+                <div class="operator-progress-meta" v-if="activeOperation?.plannedHectares && progressTotal > 0">
+                  Обработано {{ formatHectares(progressDone) }} из {{ formatHectares(activeOperation.plannedHectares) }} Га
+                </div>
+                <div class="operator-progress-meta" v-else-if="progressTotal > 0">
+                  Площадь поля: {{ formatHectares(progressTotal) }} Га
+                </div>
+                <div class="operator-progress-meta" v-else>
+                  Укажите площадь в карточке поля для расчета плана.
+                </div>
               </div>
               <div class="operator-progress-value">{{ progressPercent }}%</div>
             </div>
@@ -1234,33 +1481,79 @@ function addField() {
             <div class="mechanic-panel-head">
               <h3 class="mechanic-panel-title">Техника</h3>
             </div>
-            <div v-if="hasActiveTaskOperation && activeOperation?.equipmentId" class="mechanic-equipment-hero">
-              <div class="mechanic-equipment-hero-label">Активная задача</div>
-              <div class="mechanic-equipment-hero-title">{{ activeTaskLabel }}</div>
+            <div v-if="hasActiveEquipmentOperation" class="mechanic-equipment-hero">
+              <div class="mechanic-equipment-hero-label">{{ hasActiveTaskOperation ? 'Активная задача' : 'Активная операция' }}</div>
+              <div class="mechanic-equipment-hero-title">{{ hasActiveTaskOperation ? activeTaskLabel : (activeOperation?.operation || 'Операция без задачи') }}</div>
               <div class="mechanic-equipment-hero-sub">{{ activeEquipmentLabel }}</div>
               <div class="mechanic-equipment-hero-chip">
                 Топливо: {{ activeOperation?.equipmentFuelPercent ?? '—' }}%
               </div>
             </div>
             <div v-else class="mechanic-equipment-empty">
-              Техника появится после старта операции по задаче и выбора техники.
+              Техника появится после старта операции и выбора техники.
             </div>
             <div class="mechanic-dispatcher-card">
-              <div class="mechanic-dispatcher-title">Связь с диспетчером</div>
-              <div class="mechanic-dispatcher-wip" role="status" aria-live="polite">
-                <svg
-                  class="mechanic-wip-loader"
-                  viewBox="0 0 64 64"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                  aria-hidden="true"
-                >
-                  <path pathLength="360" d="M 56.3752 2 H 7.6248 C 7.2797 2 6.9999 2.268 6.9999 2.5985 V 61.4015 C 6.9999 61.7321 7.2797 62 7.6248 62 H 56.3752 C 56.7203 62 57.0001 61.7321 57.0001 61.4015 V 2.5985 C 57.0001 2.268 56.7203 2 56.3752 2 Z" />
-                  <path pathLength="360" d="M 55.7503 60.803 H 8.2497 V 3.1971 H 55.7503 V 60.803 Z" />
-                  <path pathLength="360" d="M 13.1528 55.5663 C 13.1528 55.8968 13.4326 56.1648 13.7777 56.1648 H 50.2223 C 50.5674 56.1648 50.8472 55.8968 50.8472 55.5663 V 8.4339 C 50.8472 8.1034 50.5674 7.8354 50.2223 7.8354 H 13.7777 C 13.4326 7.8354 13.1528 8.1034 13.1528 8.4339 V 55.5663 Z" />
-                </svg>
-                <div class="mechanic-dispatcher-wip-text">В разработке</div>
+              <div class="mechanic-dispatcher-title">
+                <span>Сообщить о проблеме</span>
               </div>
+              <p class="mechanic-dispatcher-desc">Поломка техники, препятствие на поле или другие трудности.</p>
+              <textarea
+                v-model="issueReportText"
+                class="mechanic-dispatcher-textarea"
+                placeholder="Опишите проблему коротко..."
+                maxlength="300"
+              />
+              <div v-if="issueReportFile" class="mechanic-dispatcher-file-pill">
+                <span class="mechanic-dispatcher-file-name">{{ issueReportFile.name }}</span>
+                <span class="mechanic-dispatcher-file-size">{{ formatIssueFileSize(issueReportFile.size) }}</span>
+                <button type="button" class="mechanic-dispatcher-file-remove" @click="removeIssueFile">✕</button>
+              </div>
+              <input
+                ref="issueFileInputRef"
+                class="mechanic-dispatcher-file-input"
+                type="file"
+                @change="onIssueFilePicked"
+              />
+              <div class="mechanic-dispatcher-actions">
+                <button
+                  type="button"
+                  class="action_has has_saved mechanic-dispatcher-attach"
+                  :disabled="issueReportBusy"
+                  @click="openIssueFilePicker"
+                  aria-label="Добавить файл"
+                >
+                  <svg
+                    aria-hidden="true"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    stroke-linejoin="round"
+                    stroke-linecap="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    fill="none"
+                  >
+                    <path
+                      d="m19,21H5c-1.1,0-2-.9-2-2V5c0-1.1.9-2,2-2h11l5,5v11c0,1.1-.9,2-2,2Z"
+                      data-path="box"
+                    />
+                    <path d="M7 3L7 8L15 8" data-path="line-top" />
+                    <path d="M17 20L17 13L7 13L7 20" data-path="line-bottom" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  class="mechanic-dispatcher-send"
+                  :disabled="!issueCanSubmit || issueReportBusy"
+                  @click="openIssueDispatcherPicker"
+                >
+                  <span class="mechanic-dispatcher-send-msg" aria-hidden="true"></span>
+                  <span class="mechanic-dispatcher-send-text">{{ issueReportBusy ? 'Отправка...' : 'Отправить диспетчеру' }}</span>
+                </button>
+              </div>
+              <p v-if="issueReportError" class="mechanic-dispatcher-error">{{ issueReportError }}</p>
+              <p v-else-if="issueReportSuccess" class="mechanic-dispatcher-success">{{ issueReportSuccess }}</p>
             </div>
           </article>
 
@@ -1284,6 +1577,78 @@ function addField() {
           </article>
         </section>
       </main>
+    </div>
+
+    <div
+      v-if="issueDispatcherModalOpen"
+      class="modal-backdrop"
+      @click.self="closeIssueDispatcherPicker"
+    >
+      <div class="modal modal--issue-recipients" @click.stop>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
+        <div class="modal-title">Кому отправить сообщение о проблеме?</div>
+        <p class="modal-text modal-text-muted">Выберите одного или нескольких сотрудников. Сообщение будет отправлено в чат как важное.</p>
+        <div class="modal-form modal-form--issue-filters">
+          <label class="modal-field">
+            <span class="modal-label">Должность</span>
+            <select v-model="issuePositionFilter" class="modal-select" @change="loadIssueRecipients">
+              <option value="">Все должности</option>
+              <option v-for="pos in issuePositions" :key="pos.id" :value="pos.name">{{ pos.name }}</option>
+            </select>
+          </label>
+          <label class="modal-field">
+            <span class="modal-label">Поиск</span>
+            <input
+              v-model.trim="issueSearch"
+              class="modal-input"
+              type="search"
+              placeholder="ФИО, email, телефон..."
+              @input="loadIssueRecipients"
+            />
+          </label>
+        </div>
+        <div v-if="issueDispatchersLoading" class="modal-text modal-text--loading">
+          <UiLoadingBar size="compact" />
+        </div>
+        <div v-else-if="!issueDispatchers.length" class="modal-text modal-text-muted">
+          Подходящих сотрудников не найдено.
+        </div>
+        <div v-else class="modal-issue-recipient-list">
+          <label
+            v-for="d in issueDispatchers"
+            :key="d.id"
+            class="modal-issue-recipient-item"
+            :class="{ 'modal-issue-recipient-item--selected': selectedIssueRecipientIds.includes(d.id) }"
+          >
+            <input
+              class="modal-issue-checkbox-input"
+              type="checkbox"
+              :checked="selectedIssueRecipientIds.includes(d.id)"
+              @change="toggleIssueRecipient(d.id)"
+            />
+            <span class="modal-issue-checkbox-mark" aria-hidden="true"></span>
+            <span class="modal-issue-recipient-main">{{ d.display_name || d.email || 'Сотрудник' }}</span>
+            <span class="modal-issue-recipient-meta">{{ d.position || d.role || '—' }} · {{ d.email || 'без email' }}</span>
+          </label>
+        </div>
+        <p v-if="selectedIssueRecipientIds.length" class="modal-issue-selected">
+          Выбрано получателей: {{ selectedIssueRecipientIds.length }}
+        </p>
+        <div class="modal-actions modal-actions--two">
+          <button type="button" class="modal-btn-ghost" :disabled="issueReportBusy" @click="closeIssueDispatcherPicker">
+            Отмена
+          </button>
+          <button
+            type="button"
+            class="mechanic-dispatcher-send modal-issue-submit"
+            :disabled="issueReportBusy || !issueCanSendNow"
+            @click="submitIssueToDispatcher"
+          >
+            <span class="mechanic-dispatcher-send-msg" aria-hidden="true"></span>
+            <span class="mechanic-dispatcher-send-text">{{ issueReportBusy ? 'Отправка...' : 'Отправить' }}</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div
@@ -1366,10 +1731,13 @@ function addField() {
       @click="closeEquipmentChoiceAndReturnToSheet()"
     >
       <div class="modal" @click.stop>
-        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
         <div class="modal-title">Будет ли использована техника?</div>
         <p class="modal-text modal-text-muted">
           Если техника нужна — выберите её и укажите параметры (топливо и состояние).
+        </p>
+        <p v-if="startOperationPlanError" class="modal-text modal-hectares-error">
+          {{ startOperationPlanError }}
         </p>
         <div class="modal-actions modal-actions--two">
           <button type="button" class="modal-btn-ghost" @click="startOperationConfirmedWithoutEquipment">
@@ -1389,7 +1757,7 @@ function addField() {
       @click="backFromEquipmentModalToChoice()"
     >
       <div class="modal" @click.stop>
-        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
         <div class="modal-title">Техника для операции</div>
 
         <div v-if="equipmentLoading" class="modal-text modal-text--loading">
@@ -1410,6 +1778,27 @@ function addField() {
           </div>
 
           <div class="equipment-sliders">
+            <div class="equipment-slider-block">
+              <div class="equipment-slider-row">
+                <span class="equipment-slider-label">План работ</span>
+                <span class="equipment-slider-value">
+                  {{ startPlannedHectares != null ? `${formatHectares(startPlannedHectares)} Га` : '—' }}
+                </span>
+              </div>
+              <input
+                v-model.number="startPlannedHectares"
+                type="range"
+                min="0.1"
+                :max="pendingFieldArea && pendingFieldArea > 0 ? pendingFieldArea : 0.1"
+                step="0.1"
+                class="equipment-range"
+                :disabled="!(pendingFieldArea && pendingFieldArea > 0)"
+              />
+              <div class="equipment-condition-text">
+                Доступно по полю: {{ pendingFieldArea && pendingFieldArea > 0 ? `${formatHectares(pendingFieldArea)} Га` : 'не задано' }}
+              </div>
+            </div>
+
             <div class="equipment-slider-block">
               <div class="equipment-slider-row">
                 <span class="equipment-slider-label">Топливо</span>
@@ -1453,6 +1842,9 @@ function addField() {
               </label>
             </div>
           </div>
+          <p v-if="startOperationPlanError" class="modal-text modal-hectares-error">
+            {{ startOperationPlanError }}
+          </p>
         </div>
 
         <div class="modal-actions modal-actions--two">
@@ -1477,7 +1869,7 @@ function addField() {
       @click="isStartedModalOpen = false"
     >
       <div class="modal" @click.stop>
-        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
         <div class="modal-title">Простой зафиксирован</div>
         <p class="modal-text">
           Начало простоя записано по объекту «{{ circleFieldLabel }}», операция: {{ circleTaskLabel }}.
@@ -1495,7 +1887,7 @@ function addField() {
       @click="closeFinishNotesModal"
     >
       <div class="modal" @click.stop>
-        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
         <div class="modal-title-row">
           <div class="modal-title">
             {{ finishNotesType === 'downtime' ? 'Завершить простой' : 'Остановить операцию' }}
@@ -1539,6 +1931,22 @@ function addField() {
               />
             </div>
           </div>
+          <div v-if="shouldAskProcessedHectares" class="equipment-sliders" style="margin-top: var(--space-md);">
+            <div class="equipment-slider-block">
+              <div class="equipment-slider-row">
+                <span class="equipment-slider-label">Сколько Га обработано</span>
+                <span class="equipment-slider-value">{{ formatHectares(finishProcessedHectares) }} Га</span>
+              </div>
+              <input
+                v-model.number="finishProcessedHectares"
+                type="range"
+                min="0"
+                :max="activeOperation?.plannedHectares && activeOperation.plannedHectares > 0 ? activeOperation.plannedHectares : 1"
+                step="0.1"
+                class="equipment-range"
+              />
+            </div>
+          </div>
         </div>
         <div class="modal-actions">
           <button class="modal-btn" type="button" @click="confirmFinishNotes(finishNotesText)">
@@ -1554,7 +1962,7 @@ function addField() {
       @click="isFinishedModalOpen = false"
     >
       <div class="modal" @click.stop>
-        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
         <div class="modal-title">
           {{ isFinishedModalType === 'downtime' ? 'Простой завершён' : 'Операция завершена' }}
         </div>
@@ -1573,7 +1981,7 @@ function addField() {
       @click="isAddFieldOpen = false"
     >
       <div class="modal" @click.stop>
-        <div class="modal-badge">Агро-Контроль</div>
+        <div class="modal-badge">АГРОСИСТЕМА</div>
         <div class="modal-title">Новое поле</div>
         <p class="modal-text modal-text-muted">
           Добавьте поле в список «Мои поля сегодня» для учёта работ и простоев.
@@ -2878,15 +3286,381 @@ function addField() {
 
 .mechanic-dispatcher-card {
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 12px;
-  background: var(--bg-base);
+  border-radius: 22px;
+  padding: 22px;
+  background: var(--bg-panel);
+  font-family: inherit;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+}
+
+[data-theme='dark'] .mechanic-dispatcher-card {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-panel) 92%, #062318) 0%,
+    color-mix(in srgb, var(--bg-panel) 88%, #03150f) 100%
+  );
+  border-color: color-mix(in srgb, var(--accent-green) 28%, var(--border-color));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-green) 16%, transparent),
+    0 8px 24px color-mix(in srgb, black 70%, transparent);
 }
 
 .mechanic-dispatcher-title {
-  font-size: 0.9rem;
+  font-size: 1.95rem;
+  font-weight: 800;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.1;
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+.mechanic-dispatcher-title-icon {
+  color: #f97316;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.mechanic-dispatcher-desc {
+  margin: 0 0 14px;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.mechanic-dispatcher-textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--bg-panel) 86%, var(--agri-bg));
+  color: var(--text-primary);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 1.05rem;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.mechanic-dispatcher-textarea:focus {
+  outline: none;
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 20%, transparent);
+}
+
+.mechanic-dispatcher-file-input {
+  display: none;
+}
+
+.mechanic-dispatcher-file-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--accent-green) 10%, var(--bg-panel));
+}
+
+.mechanic-dispatcher-file-name {
+  min-width: 0;
+  flex: 1;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mechanic-dispatcher-file-size {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-family: inherit;
+}
+
+.mechanic-dispatcher-file-remove {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mechanic-dispatcher-actions {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 12px;
+}
+
+/* Перенесено из ChatPage: анимация кнопки вложения */
+.mechanic-dispatcher-attach.action_has {
+  --color: 220 9% 46%;
+  --color-has: 146 33% 30%;
+  --sz: 1.25rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  width: 72px;
+  padding: 0.4rem 0.5rem;
+  border-radius: 16px;
+  border: 1px solid hsl(var(--color));
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--bg-panel) 90%, var(--agri-bg));
+  color: hsl(var(--color));
+  font-family: inherit;
+}
+
+[data-theme='dark'] .mechanic-dispatcher-attach.action_has {
+  --color: 215 14% 70%;
+  --color-has: 97 55% 52%;
+}
+
+.mechanic-dispatcher-attach.has_saved:hover:not(:disabled) {
+  border-color: hsl(var(--color-has));
+}
+
+.mechanic-dispatcher-attach.has_saved:hover:not(:disabled) svg {
+  color: hsl(var(--color-has));
+}
+
+.mechanic-dispatcher-attach.has_saved svg {
+  overflow: visible;
+  height: calc(var(--sz) * 1.75);
+  width: calc(var(--sz) * 1.75);
+  --ease: cubic-bezier(0.5, 0, 0.25, 1);
+  --zoom-from: 1.75;
+  --zoom-via: 0.75;
+  --zoom-to: 1;
+  --duration: 1s;
+}
+
+.mechanic-dispatcher-attach.has_saved:hover:not(:disabled) path[data-path='box'] {
+  transition: all 0.3s var(--ease);
+  animation: mechanic-attach-has-saved var(--duration) var(--ease) forwards;
+  fill: hsl(var(--color-has) / 0.35);
+}
+
+.mechanic-dispatcher-attach.has_saved:hover:not(:disabled) path[data-path='line-top'] {
+  animation: mechanic-attach-has-saved-line-top var(--duration) var(--ease) forwards;
+}
+
+.mechanic-dispatcher-attach.has_saved:hover:not(:disabled) path[data-path='line-bottom'] {
+  animation:
+    mechanic-attach-has-saved-line-bottom var(--duration) var(--ease) forwards,
+    mechanic-attach-has-saved-line-bottom-2 calc(var(--duration) * 1) var(--ease) calc(var(--duration) * 0.75);
+}
+
+/* Мобильный tap-аналог hover-анимации */
+.mechanic-dispatcher-attach.has_saved:active:not(:disabled) path[data-path='box'] {
+  transition: all 0.2s var(--ease);
+  animation: mechanic-attach-has-saved calc(var(--duration) * 0.75) var(--ease) forwards;
+  fill: hsl(var(--color-has) / 0.35);
+}
+
+.mechanic-dispatcher-attach.has_saved:active:not(:disabled) path[data-path='line-top'] {
+  animation: mechanic-attach-has-saved-line-top calc(var(--duration) * 0.75) var(--ease) forwards;
+}
+
+.mechanic-dispatcher-attach.has_saved:active:not(:disabled) path[data-path='line-bottom'] {
+  animation:
+    mechanic-attach-has-saved-line-bottom calc(var(--duration) * 0.75) var(--ease) forwards,
+    mechanic-attach-has-saved-line-bottom-2 calc(var(--duration) * 0.75) var(--ease) calc(var(--duration) * 0.45);
+}
+
+@keyframes mechanic-attach-has-saved-line-top {
+  33.333% { transform: rotate(0deg) translate(1px, 2px) scale(var(--zoom-from)); d: path('M 3 5 L 3 8 L 3 8'); }
+  66.666% { transform: rotate(20deg) translate(2px, -2px) scale(var(--zoom-via)); }
+  100% { transform: rotate(0deg) translate(0, 0) scale(var(--zoom-to)); d: path('M 3 5 L 3 8 L 15 8'); }
+}
+
+@keyframes mechanic-attach-has-saved-line-bottom {
+  0%, 100% { d: path('M 17 20 L 17 13 L 7 13 L 7 20'); transform: rotate(0deg) translate(0, 0) scale(var(--zoom-to)); }
+  33.333% { d: path('M 17 20 L 17 13 L 7 13 L 7 20'); transform: rotate(0deg) translate(1px, 2px) scale(var(--zoom-from)); }
+  66.666% { transform: rotate(20deg) translate(2px, -2px) scale(var(--zoom-via)); }
+}
+
+@keyframes mechanic-attach-has-saved-line-bottom-2 {
+  from { d: path('M 17 20 L 17 13 L 7 13 L 7 20'); }
+  to { transform: rotate(0deg) translate(0, 0) scale(var(--zoom-to)); d: path('M 17 20 L 17 13 L 7 13 L 7 20'); fill: transparent; }
+}
+
+@keyframes mechanic-attach-has-saved {
+  0%, 100% { transform: rotate(0deg) translate(0, 0) scale(var(--zoom-to)); }
+  33.333% { transform: rotate(0deg) translate(1px, 2px) scale(var(--zoom-from)); }
+  66.666% { transform: rotate(20deg) translate(2px, -2px) scale(var(--zoom-via)); }
+}
+
+.mechanic-dispatcher-send {
+  border: none;
+  user-select: none;
+  font-size: 18px;
+  font-family: inherit;
+  color: #fff;
+  text-align: center;
+  background-color: #1f2a44;
+  box-shadow: color-mix(in srgb, var(--border-color) 65%, #cacaca) 2px 2px 10px 1px;
+  border-radius: 12px;
+  height: 64px;
+  line-height: 64px;
+  width: 100%;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.mechanic-dispatcher-send:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mechanic-dispatcher-send-text {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
   font-weight: 700;
-  margin-bottom: 10px;
+  font-family: inherit;
+}
+
+.mechanic-dispatcher-send-msg {
+  height: 0;
+  width: 0;
+  border-radius: 2px;
+  position: absolute;
+  left: 15%;
+  top: 25%;
+  z-index: 1;
+}
+
+.mechanic-dispatcher-send:hover:not(:disabled) .mechanic-dispatcher-send-msg {
+  animation: mechanic-dispatcher-msg-run 2s forwards;
+}
+
+/* На touch-устройствах запускаем анимацию и по нажатию */
+.mechanic-dispatcher-send:active:not(:disabled) .mechanic-dispatcher-send-msg {
+  animation: mechanic-dispatcher-msg-run 1.1s forwards;
+}
+
+.mechanic-dispatcher-send:active {
+  transition: all 0.001s ease;
+  background-color: #5d9fcd;
+  box-shadow: color-mix(in srgb, var(--border-color) 65%, #97989a) 0 0 0 0;
+  transform: translateX(1px) translateY(1px);
+}
+
+@keyframes mechanic-dispatcher-msg-run {
+  0% {
+    border-top: #d6d6d9 0 solid;
+    border-bottom: #f2f2f5 0 solid;
+    border-left: #f2f2f5 0 solid;
+    border-right: #f2f2f5 0 solid;
+  }
+  20% {
+    border-top: #d6d6d9 14px solid;
+    border-bottom: #f2f2f5 14px solid;
+    border-left: #f2f2f5 20px solid;
+    border-right: #f2f2f5 20px solid;
+  }
+  25% {
+    border-top: #d6d6d9 12px solid;
+    border-bottom: #f2f2f5 12px solid;
+    border-left: #f2f2f5 18px solid;
+    border-right: #f2f2f5 18px solid;
+  }
+  80% {
+    border-top: transparent 12px solid;
+    border-bottom: transparent 12px solid;
+    border-left: transparent 18px solid;
+    border-right: transparent 18px solid;
+  }
+  100% {
+    transform: translateX(150px);
+    border-top: transparent 12px solid;
+    border-bottom: transparent 12px solid;
+    border-left: transparent 18px solid;
+    border-right: transparent 18px solid;
+  }
+}
+
+.mechanic-dispatcher-error,
+.mechanic-dispatcher-success {
+  margin: 8px 2px 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .mechanic-dispatcher-card {
+    border-radius: 16px;
+    padding: 14px;
+  }
+  .mechanic-dispatcher-title {
+    font-size: 1.15rem;
+    margin-bottom: 10px;
+  }
+  .mechanic-dispatcher-desc {
+    font-size: 0.84rem;
+    margin-bottom: 10px;
+  }
+  .mechanic-dispatcher-textarea {
+    min-height: 88px;
+    font-size: 0.95rem;
+    border-radius: 14px;
+    padding: 12px;
+  }
+  .mechanic-dispatcher-file-pill {
+    padding: 7px 9px;
+    border-radius: 10px;
+    gap: 6px;
+  }
+  .mechanic-dispatcher-file-name {
+    max-width: 58vw;
+    font-size: 0.8rem;
+  }
+  .mechanic-dispatcher-actions {
+    grid-template-columns: 52px 1fr;
+    gap: 8px;
+  }
+  .mechanic-dispatcher-attach.action_has {
+    height: 48px;
+    width: 52px;
+    border-radius: 12px;
+  }
+  .mechanic-dispatcher-send {
+    height: 48px;
+    border-radius: 12px;
+    font-size: 0.86rem;
+    box-shadow: 0 6px 18px color-mix(in srgb, #1f2a44 44%, transparent);
+  }
+  .mechanic-dispatcher-send-text {
+    letter-spacing: 0.02em;
+  }
+  .mechanic-dispatcher-send-msg {
+    left: 12%;
+  }
+}
+
+.mechanic-dispatcher-error {
+  color: var(--danger-red);
+}
+
+.mechanic-dispatcher-success {
+  color: var(--accent-green);
 }
 
 .mechanic-dispatcher-btn {
@@ -3514,6 +4288,175 @@ function addField() {
   border-color: var(--accent-green);
 }
 
+.modal-hectares-error {
+  margin-top: -2px;
+  margin-bottom: 0;
+  color: var(--danger-red);
+}
+
+.modal--issue-recipients {
+  width: min(100vw - 48px, 620px);
+}
+
+.modal-form--issue-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+}
+
+.modal-form--issue-filters .modal-select,
+.modal-form--issue-filters .modal-input {
+  min-height: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.modal-form--issue-filters .modal-input {
+  padding: 0 14px;
+}
+
+.modal-form--issue-filters .modal-select {
+  padding: 0 12px;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23697586' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 38px;
+}
+
+.modal-form--issue-filters .modal-select:focus,
+.modal-form--issue-filters .modal-input:focus {
+  outline: none;
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 24%, transparent);
+}
+
+.modal-issue-recipient-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: var(--space-md);
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.modal-issue-recipient-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--chip-bg);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+}
+
+.modal-issue-recipient-item:hover {
+  border-color: color-mix(in srgb, var(--accent-green) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--chip-bg) 88%, var(--accent-green));
+  transform: translateY(-1px);
+}
+
+.modal-issue-checkbox-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.modal-issue-checkbox-mark {
+  position: relative;
+  top: 0;
+  left: 0;
+  width: 1.3em;
+  height: 1.3em;
+  margin-top: 2px;
+  border-radius: 0.32em;
+  background-color: transparent;
+  transition: all 0.25s ease;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+}
+
+.modal-issue-checkbox-mark::after {
+  content: '';
+  position: absolute;
+  transform: rotate(0deg);
+  border: 0.1em solid var(--text-secondary);
+  left: 0.08em;
+  top: 0.08em;
+  width: 1em;
+  height: 1em;
+  border-radius: 0.25em;
+  transition: all 0.25s ease, border-width 0.1s ease;
+}
+
+.modal-issue-checkbox-input:checked + .modal-issue-checkbox-mark {
+  background-color: var(--accent-green);
+  border-color: var(--accent-green);
+}
+
+.modal-issue-checkbox-input:checked + .modal-issue-checkbox-mark::after {
+  left: 0.45em;
+  top: 0.24em;
+  width: 0.25em;
+  height: 0.5em;
+  border-color: transparent #fff #fff transparent;
+  border-width: 0 0.15em 0.15em 0;
+  border-radius: 0;
+  transform: rotate(45deg);
+}
+
+.modal-issue-checkbox-input:focus-visible + .modal-issue-checkbox-mark {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 28%, transparent);
+}
+
+.modal-issue-recipient-item--selected {
+  border-color: var(--accent-green);
+  background: color-mix(in srgb, var(--chip-bg) 74%, var(--accent-green));
+}
+
+.modal-issue-recipient-main {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.modal-issue-recipient-meta {
+  grid-column: 2;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.modal-issue-selected {
+  margin: 0 0 var(--space-sm);
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--text-secondary) 78%, var(--accent-green));
+}
+
+.modal-issue-submit {
+  height: 52px;
+  line-height: 52px;
+  border-radius: 999px;
+  font-size: 15px;
+  flex: 1;
+}
+
+.modal-actions--two .modal-btn-ghost {
+  min-height: 52px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .equipment-sliders {
   display: flex;
   flex-direction: column;
@@ -3901,6 +4844,59 @@ function addField() {
     max-height: 86vh;
   }
 
+  .mechanic-panel {
+    border-radius: 12px;
+  }
+
+  .mechanic-dispatcher-card {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .mechanic-dispatcher-title {
+    font-size: 1.02rem;
+  }
+
+  .mechanic-dispatcher-desc {
+    font-size: 0.8rem;
+    line-height: 1.3;
+  }
+
+  .mechanic-dispatcher-textarea {
+    min-height: 82px;
+    border-radius: 12px;
+    padding: 10px 11px;
+    font-size: 0.9rem;
+  }
+
+  .mechanic-dispatcher-attach.action_has {
+    width: 48px;
+    height: 46px;
+  }
+
+  .mechanic-dispatcher-send {
+    height: 46px;
+    line-height: 46px;
+  }
+
+  .modal--issue-recipients {
+    width: min(100vw - 12px, 620px);
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .modal--issue-recipients .modal-title {
+    font-size: 0.95rem;
+  }
+
+  .modal--issue-recipients .modal-text {
+    font-size: 0.78rem;
+  }
+
+  .modal-issue-recipient-list {
+    max-height: 36vh;
+  }
+
   .modal-actions {
     flex-direction: column;
   }
@@ -3914,6 +4910,55 @@ function addField() {
 
 @media (max-width: 640px) {
   .mechanic-shell { gap: var(--space-md); }
+
+  .modal-form--issue-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .modal--issue-recipients {
+    width: min(100vw - 18px, 620px);
+    padding: var(--space-md);
+    border-radius: 14px;
+    max-height: 90vh;
+  }
+
+  .modal--issue-recipients .modal-title {
+    font-size: 1rem;
+    margin-bottom: 6px;
+  }
+
+  .modal--issue-recipients .modal-text {
+    font-size: 0.82rem;
+    margin-bottom: 10px;
+  }
+
+  .modal-issue-recipient-list {
+    max-height: 34vh;
+    gap: 6px;
+  }
+
+  .modal-issue-recipient-item {
+    padding: 8px 10px;
+    border-radius: 9px;
+    column-gap: 8px;
+  }
+
+  .modal-issue-recipient-main {
+    font-size: 0.84rem;
+  }
+
+  .modal-issue-recipient-meta {
+    font-size: 0.72rem;
+  }
+
+  .modal-issue-submit,
+  .modal-actions--two .modal-btn-ghost {
+    min-height: 46px;
+    height: 46px;
+    line-height: 46px;
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+  }
 
   .operator-hero {
     padding: var(--space-md);

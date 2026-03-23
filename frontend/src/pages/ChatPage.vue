@@ -263,7 +263,13 @@ const composerPlaceholder = computed(() => {
 async function refreshThreads() {
   if (!configured.value) return
   const rows = await fetchChatThreadList()
-  conversations.value = rows.map(mapThreadRow)
+  conversations.value = rows
+    .map(mapThreadRow)
+    .sort((a, b) => {
+      if (a.unreadUrgent !== b.unreadUrgent) return b.unreadUrgent - a.unreadUrgent
+      if (a.unread !== b.unread) return b.unread - a.unread
+      return 0
+    })
 }
 
 async function reloadMessages() {
@@ -916,7 +922,7 @@ onUnmounted(() => {
           :key="c.id"
           type="button"
           class="chat-page__row"
-          :class="{ 'chat-page__row--active': c.id === activeId }"
+          :class="{ 'chat-page__row--active': c.id === activeId, 'chat-page__row--urgent': c.unreadUrgent > 0 }"
           @click="onPick(c)"
         >
           <div class="chat-page__row-av-wrap">
@@ -938,6 +944,9 @@ onUnmounted(() => {
             <p class="chat-page__row-preview">
               {{ c.lastPreview }}
             </p>
+          </div>
+          <div v-if="c.unreadUrgent > 0" class="chat-page__urgent-badge" :aria-label="`Важно: ${c.unreadUrgent}`">
+            Важно
           </div>
           <div v-if="c.unread > 0" class="chat-page__unread-badge" :aria-label="`Непрочитано: ${c.unread}`">
             {{ c.unread > 9 ? '9+' : c.unread }}
@@ -1195,7 +1204,15 @@ onUnmounted(() => {
                       @touchend="onOwnPaneTouchEnd(block.msg)"
                       @contextmenu="onMessageContextMenu($event, block.msg)"
                     >
-                      <div v-if="block.msg.text" class="chat-page__bubble" :class="block.msg.side === 'out' ? 'chat-page__bubble--out' : 'chat-page__bubble--in'">
+                      <div
+                        v-if="block.msg.text"
+                        class="chat-page__bubble"
+                        :class="[
+                          block.msg.side === 'out' ? 'chat-page__bubble--out' : 'chat-page__bubble--in',
+                          block.msg.isUrgent && block.msg.side === 'in' ? 'chat-page__bubble--urgent' : '',
+                        ]"
+                      >
+                        <div v-if="block.msg.isUrgent && block.msg.side === 'in'" class="chat-page__urgent-chip">Важно: проблема</div>
                         <p>{{ block.msg.text }}</p>
                       </div>
                       <a
@@ -1656,6 +1673,10 @@ onUnmounted(() => {
   border-left-color: var(--nav-active-bar);
 }
 
+.chat-page__row--urgent {
+  background: color-mix(in srgb, var(--danger-red) 8%, transparent);
+}
+
 .chat-page__row-av-wrap {
   position: relative;
   flex-shrink: 0;
@@ -1801,6 +1822,23 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.chat-page__urgent-badge {
+  margin-left: 8px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger-red) 88%, white);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .chat-page__empty {
@@ -2656,6 +2694,25 @@ onUnmounted(() => {
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   border-top-left-radius: 4px;
+}
+
+.chat-page__bubble--urgent {
+  border-color: color-mix(in srgb, var(--danger-red) 55%, var(--border-color));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger-red) 26%, transparent), var(--shadow-card);
+}
+
+.chat-page__urgent-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #fff;
+  background: color-mix(in srgb, var(--danger-red) 88%, white);
 }
 
 .chat-page__bubble--out {

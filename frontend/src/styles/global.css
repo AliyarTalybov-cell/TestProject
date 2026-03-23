@@ -57,21 +57,21 @@
   --bg-panel: #061b15;
   --bg-panel-hover: #0b241c;
   --agri-bg: #061b15;
-  --agri-primary: #1fd07d;
-  --agri-light: color-mix(in srgb, #1fd07d 20%, transparent);
+  --agri-primary: #3d5c40;
+  --agri-light: color-mix(in srgb, #3d5c40 20%, transparent);
   --sidebar-bg: #061b15;
-  --sidebar-border: color-mix(in srgb, #1fd07d 18%, #0a241b);
-  --sidebar-text: color-mix(in srgb, white 78%, #1fd07d);
+  --sidebar-border: color-mix(in srgb, #3d5c40 18%, #0a241b);
+  --sidebar-text: color-mix(in srgb, white 78%, #3d5c40);
   --sidebar-text-hover: #ffffff;
-  --nav-active-bg: color-mix(in srgb, #1fd07d 22%, transparent);
-  --nav-active-text: color-mix(in srgb, #1fd07d 48%, white);
+  --nav-active-bg: color-mix(in srgb, #3d5c40 22%, transparent);
+  --nav-active-text: color-mix(in srgb, #3d5c40 48%, white);
   --nav-active-bar: var(--agri-primary);
-  --sidebar-hover-bg: color-mix(in srgb, #1fd07d 12%, transparent);
-  --topbar-border: color-mix(in srgb, #1fd07d 14%, #061b15);
-  --border-color: color-mix(in srgb, #1fd07d 14%, #061b15);
+  --sidebar-hover-bg: color-mix(in srgb, #3d5c40 12%, transparent);
+  --topbar-border: color-mix(in srgb, #3d5c40 14%, #061b15);
+  --border-color: color-mix(in srgb, #3d5c40 14%, #061b15);
   --text-primary: #ffffff;
-  --text-secondary: color-mix(in srgb, white 58%, #1fd07d);
-  --accent-green: #1fd07d;
+  --text-secondary: color-mix(in srgb, white 58%, #3d5c40);
+  --accent-green: #3d5c40;
   --accent-green-hover: #37de90;
   --danger-red: #d33c3c;
   --warning-orange: #d3823c;
@@ -81,19 +81,19 @@
   --shadow-card: 0 2px 8px -2px rgba(0, 0, 0, 0.15);
   --bg-body-image: linear-gradient(to bottom, #061b15 0%, #051510 100%);
   --modal-backdrop: rgba(0, 0, 0, 0.34);
-  --chip-bg: color-mix(in srgb, #1fd07d 10%, #0a241b);
+  --chip-bg: color-mix(in srgb, #3d5c40 10%, #0a241b);
   --weather-sky-bg: linear-gradient(180deg, #2a3a4a 0%, #1a2530 100%);
-  --row-hover-bg: color-mix(in srgb, #1fd07d 8%, transparent);
+  --row-hover-bg: color-mix(in srgb, #3d5c40 8%, transparent);
   --donut-inner-bg: radial-gradient(circle at 50% 0, #133126, #06150f);
   --donut-ring-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   --weather-hero-bg: linear-gradient(135deg, #2d5a38 0%, #1b3b26 100%);
-  --weather-recommendation-bg: color-mix(in srgb, #1fd07d 12%, transparent);
+  --weather-recommendation-bg: color-mix(in srgb, #3d5c40 12%, transparent);
   /* Экран оператора: карточка погоды в тёмной теме */
   --mechanic-weather-card-bg: linear-gradient(180deg, #1f3c2d 0%, #13271d 100%);
-  --mechanic-weather-card-border: color-mix(in srgb, #1fd07d 20%, #0f2b20);
+  --mechanic-weather-card-border: color-mix(in srgb, #3d5c40 20%, #0f2b20);
   --mechanic-weather-card-text: #ffffff;
-  --mechanic-weather-card-text-muted: color-mix(in srgb, white 82%, #1fd07d);
-  --mechanic-weather-permit-bg: color-mix(in srgb, #1fd07d 22%, transparent);
+  --mechanic-weather-card-text-muted: color-mix(in srgb, white 82%, #3d5c40);
+  --mechanic-weather-permit-bg: color-mix(in srgb, #3d5c40 22%, transparent);
 }
 
 /* Единая тёмная палитра для всех экранов/модалок */
@@ -126,6 +126,13 @@
 [data-theme='dark'] .input:focus {
   border-color: var(--accent-green);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
+}
+
+/* В тёмной теме текст на кнопках всегда белый для читаемости */
+[data-theme='dark'] button,
+[data-theme='dark'] .btn,
+[data-theme='dark'] [role='button'] {
+  color: #ffffff !important;
 }
 
 /* Скроллбары в тёмной теме без белых полос */
@@ -441,6 +448,10 @@ a {
 
 [data-theme='dark'] .actual-text {
   color: #ffffff;
+}
+
+[data-theme='dark'] .sidebar-brand-link {
+  --animation-color: #1ecd7b;
 }
 
 [data-theme='dark'] .actual-text-accent {

@@ -33,6 +33,7 @@ export type ChatThreadListRow = {
   last_message_at: string | null
   last_sender_id: string | null
   unread_count: number
+  unread_urgent_count?: number
   peer_user_id: string | null
   peer_display_name: string | null
   peer_email: string | null
@@ -51,6 +52,7 @@ export type UiChatConversation = {
   lastPreview: string
   lastTime: string
   unread: number
+  unreadUrgent: number
   isTeam: boolean
   peerUserId: string | null
   /** Для лички: profiles.last_activity_at; у группы null (присутствие не по собеседнику) */
@@ -68,6 +70,8 @@ export type ChatMessageRow = {
   attachment_path: string | null
   attachment_name: string | null
   attachment_size: number | null
+  is_urgent?: boolean | null
+  urgent_kind?: 'problem_report' | null
   created_at: string
 }
 
@@ -80,6 +84,8 @@ export type UiChatMessage = {
   read?: boolean
   attachment?: { name: string; size: string; url?: string }
   createdAt: string
+  isUrgent: boolean
+  urgentKind?: 'problem_report'
   /** В группе — аватар отправителя входящих */
   inAvatarInitials?: string
   inAvatarTone?: AvatarTone
@@ -170,6 +176,7 @@ export function mapThreadRow(r: ChatThreadListRow): UiChatConversation {
     lastPreview: r.last_message_body || (isTeam ? 'Нет сообщений' : ''),
     lastTime: formatThreadListTime(r.last_message_at),
     unread: Number(r.unread_count) || 0,
+    unreadUrgent: Number(r.unread_urgent_count) || 0,
     isTeam,
     peerUserId: peerId,
     peerLastActivityAt: !isTeam ? (r.peer_last_activity_at ?? null) : null,
@@ -330,6 +337,8 @@ export function mapMessagesForUi(
       read,
       attachment: att,
       createdAt: m.created_at,
+      isUrgent: Boolean(m.is_urgent),
+      urgentKind: m.urgent_kind === 'problem_report' ? 'problem_report' : undefined,
       inAvatarInitials: meta?.initials,
       inAvatarTone: meta?.tone,
     }
@@ -369,7 +378,11 @@ export async function markThreadAsRead(threadId: string): Promise<void> {
   await refreshChatTotalUnread()
 }
 
-export async function sendChatMessage(threadId: string, body: string): Promise<void> {
+export async function sendChatMessage(
+  threadId: string,
+  body: string,
+  opts?: { urgent?: boolean; urgentKind?: 'problem_report' | null },
+): Promise<void> {
   if (!supabase) throw new Error('Нет подключения')
   const {
     data: { user },
@@ -384,6 +397,8 @@ export async function sendChatMessage(threadId: string, body: string): Promise<v
     thread_id: threadId,
     sender_id: user.id,
     body: trimmed,
+    is_urgent: Boolean(opts?.urgent),
+    urgent_kind: opts?.urgent ? opts?.urgentKind ?? 'problem_report' : null,
   })
   if (error) throw error
 }
@@ -399,7 +414,12 @@ function sanitizeChatFileName(name: string): string {
 /**
  * Загрузка файла в Storage и сообщение в чат (текст опционален — подпись к файлу).
  */
-export async function sendChatMessageWithFile(threadId: string, file: File, body?: string): Promise<void> {
+export async function sendChatMessageWithFile(
+  threadId: string,
+  file: File,
+  body?: string,
+  opts?: { urgent?: boolean; urgentKind?: 'problem_report' | null },
+): Promise<void> {
   if (!supabase) throw new Error('Нет подключения')
   const {
     data: { user },
@@ -430,6 +450,8 @@ export async function sendChatMessageWithFile(threadId: string, file: File, body
     attachment_path: objectPath,
     attachment_name: file.name,
     attachment_size: file.size,
+    is_urgent: Boolean(opts?.urgent),
+    urgent_kind: opts?.urgent ? opts?.urgentKind ?? 'problem_report' : null,
   })
   if (error) {
     try {
@@ -582,6 +604,8 @@ function rowFromRealtimeNew(raw: Record<string, unknown>): ChatMessageRow | null
     attachment_path: raw.attachment_path != null ? String(raw.attachment_path) : null,
     attachment_name: raw.attachment_name != null ? String(raw.attachment_name) : null,
     attachment_size: raw.attachment_size != null ? Number(raw.attachment_size) : null,
+    is_urgent: raw.is_urgent != null ? Boolean(raw.is_urgent) : false,
+    urgent_kind: raw.urgent_kind === 'problem_report' ? 'problem_report' : null,
     created_at,
   }
 }

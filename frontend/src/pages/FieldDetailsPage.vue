@@ -786,6 +786,10 @@ watch(
                   </RouterLink>
                   <span v-else class="field-history-value">Не указана</span>
                 </div>
+                <div class="field-history-cell">
+                  <span class="field-history-label">Обработано, Га</span>
+                  <span class="field-history-value">{{ h.processedHectares ?? '—' }}</span>
+                </div>
                 <div class="field-history-cell field-history-cell--full">
                   <span class="field-history-label">Список дел после выполнения</span>
                   <span class="field-history-value field-history-value--multiline">{{ h.notes || '—' }}</span>

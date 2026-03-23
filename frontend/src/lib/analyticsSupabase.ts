@@ -39,6 +39,8 @@ export type OperationRow = {
   equipment_condition_value?: number | null
   equipment_condition_label?: string | null
   equipment_repair_notes?: string | null
+  planned_hectares?: number | null
+  processed_hectares?: number | null
 }
 
 export type EquipmentOperationHistoryRow = {
@@ -56,6 +58,8 @@ export type EquipmentOperationHistoryRow = {
   equipmentConditionLabel?: string | null
   equipmentRepairNotes?: string | null
   fieldName?: string | null
+  plannedHectares?: number | null
+  processedHectares?: number | null
 }
 
 export type EquipmentOperationHistoryPage = {
@@ -73,6 +77,8 @@ export type FieldOperationHistoryRow = {
   notes?: string | null
   equipmentId?: string | null
   equipmentLabel?: string | null
+  plannedHectares?: number | null
+  processedHectares?: number | null
 }
 
 export type FieldOperationHistoryPage = {
@@ -137,6 +143,8 @@ function rowToOperation(r: OperationRow): StoredOperation {
     equipmentConditionValue: r.equipment_condition_value ?? undefined,
     equipmentConditionLabel: r.equipment_condition_label ?? undefined,
     equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
+    plannedHectares: r.planned_hectares ?? undefined,
+    processedHectares: r.processed_hectares ?? undefined,
   }
 }
 
@@ -184,6 +192,8 @@ export async function insertOperation(
     equipment_condition_value: op.equipmentConditionValue ?? null,
     equipment_condition_label: op.equipmentConditionLabel ?? null,
     equipment_repair_notes: op.equipmentRepairNotes?.trim() || null,
+    planned_hectares: op.plannedHectares ?? null,
+    processed_hectares: op.processedHectares ?? null,
   }
 
   const payloadWithFuelLeft = {
@@ -243,7 +253,7 @@ export async function loadOperationsFromSupabase(
   if (!supabase) return []
   const sb = supabase
   const baseSelect = 'id, user_id, employee, field_id, field_name, operation, start_iso, end_iso, duration_minutes, notes'
-  const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+  const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes, planned_hectares, processed_hectares'
   const equipmentFuelLeftSelect = 'equipment_fuel_left_percent'
 
   const attempt = async (select: string): Promise<StoredOperation[]> => {
@@ -288,7 +298,7 @@ export async function loadOperationsByEquipmentFromSupabase(
 
   const sb = supabase
   const baseSelect = 'id, user_id, employee, field_name, operation, start_iso, end_iso, duration_minutes, notes'
-  const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
+  const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes, planned_hectares, processed_hectares'
   const equipmentFuelLeftSelect = 'equipment_fuel_left_percent'
   const safePage = Math.max(1, Math.floor(page))
   const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)))
@@ -323,6 +333,8 @@ export async function loadOperationsByEquipmentFromSupabase(
       equipmentConditionLabel: r.equipment_condition_label ?? undefined,
       equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
       fieldName: r.field_name ?? undefined,
+      plannedHectares: r.planned_hectares ?? undefined,
+      processedHectares: r.processed_hectares ?? undefined,
     }))
     return { rows, total: Number(count ?? 0) }
   }
@@ -356,7 +368,7 @@ export async function loadOperationsByFieldFromSupabase(
   if (!supabase) return { rows: [], total: 0 }
 
   const sb = supabase
-  const baseSelect = 'id, user_id, employee, operation, start_iso, end_iso, duration_minutes, notes, equipment_id'
+  const baseSelect = 'id, user_id, employee, operation, start_iso, end_iso, duration_minutes, notes, equipment_id, planned_hectares, processed_hectares'
   const equipmentJoin = 'equipment:equipment_id(id, brand, model, license_plate)'
   const safePage = Math.max(1, Math.floor(page))
   const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)))
@@ -390,6 +402,8 @@ export async function loadOperationsByFieldFromSupabase(
       durationMinutes: r.duration_minutes as number,
       notes: (r.notes ?? null) as string | null,
       equipmentId: (r.equipment_id ?? null) as string | null,
+      plannedHectares: (r.planned_hectares ?? null) as number | null,
+      processedHectares: (r.processed_hectares ?? null) as number | null,
       equipmentLabel,
     }
   })

@@ -17,6 +17,8 @@ export type StoredOperation = {
   equipmentConditionValue?: number | null
   equipmentConditionLabel?: string | null
   equipmentRepairNotes?: string | null
+  plannedHectares?: number | null
+  processedHectares?: number | null
 }
 
 export type ActiveOperation = {
@@ -37,6 +39,8 @@ export type ActiveOperation = {
   equipmentConditionValue?: number | null
   equipmentConditionLabel?: string | null
   equipmentRepairNotes?: string | null
+  plannedHectares?: number | null
+  processedHectares?: number | null
 }
 
 const OPERATIONS_KEY = 'agro_ctrl:operations'
