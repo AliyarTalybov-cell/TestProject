@@ -36,6 +36,20 @@ const createdAtLabel = computed(() => {
   return new Date(raw).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
 })
 
+const lastLoginLabel = computed(() => {
+  const raw = props.employee?.last_activity_at
+  if (!raw) return 'Не входил'
+  const dt = new Date(raw)
+  if (Number.isNaN(dt.getTime())) return '—'
+  return dt.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
+
 function initials(name: string | null, email: string): string {
   const base = name?.trim() ? name.trim() : email.split('@')[0]
   const parts = base.trim().split(/\s+/)
@@ -165,6 +179,14 @@ watch(
                     />
                     <span class="eem-acc-switch-slider" aria-hidden="true" />
                   </label>
+                </div>
+                <div class="eem-meta-row">
+                  <span class="eem-meta-label">Последний вход</span>
+                  <span class="eem-meta-value">{{ lastLoginLabel }}</span>
+                </div>
+                <div class="eem-meta-row">
+                  <span class="eem-meta-label">Создан</span>
+                  <span class="eem-meta-value">{{ createdAtLabel }}</span>
                 </div>
               </div>
             </aside>
@@ -372,6 +394,25 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.eem-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in srgb, var(--border-color) 72%, transparent);
+}
+.eem-meta-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.eem-meta-value {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
 }
 .eem-status-label {
   font-size: 0.8125rem;
