@@ -287,6 +287,12 @@ async function reloadMessages() {
   messages.value = mapMessagesForUi(rows, uid, peerRead, conv?.kind === 'group' ? { isGroup: true, senderMeta: meta } : undefined)
 }
 
+function scrollMessagesToBottom() {
+  const el = messagesScrollEl.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
 async function loadOlderMessages() {
   const tid = activeId.value
   const uid = myId.value
@@ -433,6 +439,8 @@ async function onPick(c: UiChatConversation) {
     error.value = formatSupabaseError(e) || 'Не удалось открыть диалог'
   } finally {
     chatLoading.value = false
+    await nextTick()
+    scrollMessagesToBottom()
   }
 }
 
