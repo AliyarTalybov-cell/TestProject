@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { ActiveDowntime, DowntimeCategory } from '@/lib/downtimeStorage'
-import { appendEvent, loadActive, saveActive } from '@/lib/downtimeStorage'
+import { appendEvent, loadActive, saveActive, loadEvents as loadDowntimeEvents } from '@/lib/downtimeStorage'
 import {
   appendOperation,
+  loadOperations,
   loadActiveOperation,
   saveActiveOperation,
 } from '@/lib/operationStorage'
@@ -13,9 +14,15 @@ import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperat
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
 import { upsertOperatorStatus, deleteOperatorStatus } from '@/lib/operatorStatusSupabase'
+import { loadCalendarTasks, updateCalendarTask } from '@/lib/calendarTasksSupabase'
 import { useAuth } from '@/stores/auth'
-import { loadCalendarTasks, updateCalendarTask, type CalendarTaskRow } from '@/lib/calendarTasksSupabase'
-import WeatherWidgetCompact from '@/components/WeatherWidgetCompact.vue'
+import {
+  addTaskComment,
+  addTaskEvent,
+  loadTasksFiltered,
+  updateTask,
+  type TaskRow,
+} from '@/lib/tasksSupabase'
 import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 
@@ -95,11 +102,20 @@ const isStartedModalOpen = ref(false)
 const isFinishedModalOpen = ref(false)
 const isFinishedModalType = ref<'downtime' | 'operation'>('downtime')
 const isAddFieldOpen = ref(false)
+const isFieldsOpen = ref(false)
+const fieldsDropdownRef = ref<HTMLElement | null>(null)
 
 // --- Модалки старта операции с привязкой техники ---
 const isEquipmentChoiceOpen = ref(false) // Будет ли использована техника?
 const isEquipmentModalOpen = ref(false) // Выбор техники + параметры
-const pendingStartOperation = ref<{ fieldId?: string; fieldName?: string; operation?: string } | null>(null)
+const pendingStartOperation = ref<{
+  fieldId?: string
+  fieldName?: string
+  operation?: string
+  taskId?: string | null
+  taskTitle?: string | null
+  taskNumber?: number | null
+} | null>(null)
 
 type EquipmentConditionBucket = 'good' | 'acceptable' | 'partial' | 'bad'
 
@@ -135,6 +151,8 @@ const finishNotesText = ref('')
 
 // Для операций с техникой: сколько топлива осталось у техники (после остановки)
 const equipmentFuelLeftPercent = ref<number>(0)
+const operatorNoteDraft = ref('')
+const operatorNoteSaving = ref(false)
 
 const shouldAskEquipmentFuelLeft = computed(
   () => finishNotesType.value === 'operation' && !!activeOperation.value?.equipmentId,
@@ -145,15 +163,38 @@ const newFieldOperation = ref('')
 
 const fields = ref<MechanicField[]>([])
 const currentFieldId = ref<string | null>(active.value?.fieldId ?? null)
+const userTasks = ref<TaskRow[]>([])
+const userTasksLoading = ref(false)
+type CalendarTaskToday = {
+  id: string
+  title: string
+  date: string
+  startTime: string | null
+  endTime: string | null
+  priority: string
+  completedAt: string | null
+}
+const calendarTasksToday = ref<CalendarTaskToday[]>([])
+const calendarTasksLoading = ref(false)
+const calendarTaskSavingIds = ref<string[]>([])
 
 const reasons = ref<Array<{ label: string; description: string; category: DowntimeCategory }>>([...DEFAULT_REASONS])
 const workOperationsList = ref<WorkOperationRow[]>([])
+const operationHistory = ref(loadOperations())
+const downtimeHistory = ref(loadDowntimeEvents())
+
+function refreshShiftHistory() {
+  operationHistory.value = loadOperations()
+  downtimeHistory.value = loadDowntimeEvents()
+}
 
 onMounted(async () => {
+  refreshShiftHistory()
   const savedOp = loadActiveOperation()
   if (savedOp && !active.value) {
     activeOperation.value = savedOp
     workStartedAt.value = savedOp.startISO
+    operatorNoteDraft.value = savedOp.operatorNote ?? ''
     if (savedOp.fieldId) currentFieldId.value = savedOp.fieldId
   }
   timerInterval = setInterval(() => {
@@ -164,7 +205,7 @@ onMounted(async () => {
       const fieldRows: FieldRow[] = await loadFields()
       fields.value = fieldRows.map((f) => ({
         id: f.id,
-        name: `Поле №${f.number} — ${f.name}`,
+        name: (f.name || '').trim() || `Поле №${f.number}`,
         operation: 'Операция не выбрана',
       }))
       if (!currentFieldId.value && fields.value.length) {
@@ -179,16 +220,34 @@ onMounted(async () => {
         }))
       }
       workOperationsList.value = await loadWorkOperations()
+      equipmentList.value = await loadEquipment()
       const uid = auth.user.value?.id ?? null
       if (uid) {
-        todayTasksLoading.value = true
+        userTasksLoading.value = true
+        calendarTasksLoading.value = true
         try {
-          const all = await loadCalendarTasks(uid)
-          todayTasks.value = all.filter((t) => t.date === todayKey.value)
-        } catch {
-          todayTasks.value = []
+          const [taskRows, calendarRows] = await Promise.all([
+            loadTasksFiltered(true, uid, { limit: 200 }),
+            loadCalendarTasks(uid),
+          ])
+          userTasks.value = taskRows
+          const today = new Date()
+          const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+          calendarTasksToday.value = calendarRows
+            .filter((t) => t.date === todayKey)
+            .map((t) => ({
+              id: t.id,
+              title: t.title,
+              date: t.date,
+              startTime: t.start_time ?? null,
+              endTime: t.end_time ?? null,
+              priority: t.priority,
+              completedAt: t.completed_at ?? null,
+            }))
+            .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''))
         } finally {
-          todayTasksLoading.value = false
+          userTasksLoading.value = false
+          calendarTasksLoading.value = false
         }
       }
     } catch {
@@ -226,10 +285,23 @@ onMounted(async () => {
       })
     }
   }
+  window.addEventListener('mousedown', onGlobalPointerDown)
+})
+onActivated(() => {
+  refreshShiftHistory()
 })
 onUnmounted(() => {
   if (timerInterval) clearInterval(timerInterval)
+  window.removeEventListener('mousedown', onGlobalPointerDown)
 })
+
+function onGlobalPointerDown(e: MouseEvent) {
+  if (!isFieldsOpen.value) return
+  const root = fieldsDropdownRef.value
+  if (!root) return
+  if (e.target instanceof Node && root.contains(e.target)) return
+  isFieldsOpen.value = false
+}
 
 const currentField = computed<MechanicField | null>(() => {
   if (active.value?.fieldId) {
@@ -250,6 +322,110 @@ const statusText = computed(() => {
 })
 
 const isOperationPaused = computed(() => !!activeOperation.value?.pausedAt)
+const isFieldLocked = computed(() => !!active.value || !!workStartedAt.value)
+const hasActiveTaskOperation = computed(() => !!activeOperation.value?.taskId)
+const activeTaskLabel = computed(() => {
+  const op = activeOperation.value
+  if (!op?.taskId) return 'Операция без задачи'
+  const number = op.taskNumber ? `#${op.taskNumber} ` : ''
+  return `${number}${op.taskTitle ?? 'Задача'}`
+})
+const activeEquipment = computed(() => {
+  const id = activeOperation.value?.equipmentId
+  if (!id) return null
+  return equipmentList.value.find((e) => e.id === id) ?? null
+})
+const activeEquipmentLabel = computed(() => {
+  const e = activeEquipment.value
+  if (!e) return 'Техника не выбрана'
+  return `${e.brand} — ${e.license_plate}${e.model ? ` (${e.model})` : ''}`
+})
+
+const nextUserTasks = computed(() =>
+  userTasks.value
+    .filter((t) => t.status !== 'done')
+    .sort((a, b) => a.number - b.number)
+    .slice(0, 8),
+)
+
+const dropdownFields = computed(() =>
+  fields.value.filter((f) => f.id !== currentField.value?.id),
+)
+
+function formatJournalTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+type ShiftJournalItem = {
+  id: string
+  isActive: boolean
+  timeLabel: string
+  title: string
+  subtitle: string
+}
+
+const shiftJournalItems = computed<ShiftJournalItem[]>(() => {
+  const items: Array<{ at: number; item: ShiftJournalItem }> = []
+  if (active.value?.startISO) {
+    const at = new Date(active.value.startISO).getTime()
+    items.push({
+      at,
+      item: {
+        id: `active-downtime-${active.value.id}`,
+        isActive: true,
+        timeLabel: `${formatJournalTime(active.value.startISO)} — Сейчас`,
+        title: `Простой — ${active.value.reason}`,
+        subtitle: active.value.fieldName ?? 'Без поля',
+      },
+    })
+  }
+  if (activeOperation.value?.startISO) {
+    const at = new Date(activeOperation.value.startISO).getTime()
+    items.push({
+      at,
+      item: {
+        id: `active-op-${activeOperation.value.startISO}`,
+        isActive: true,
+        timeLabel: `${formatJournalTime(activeOperation.value.startISO)} — Сейчас`,
+        title: `${activeOperation.value.fieldName ?? 'Поле'} — ${activeOperation.value.operation ?? 'Операция'}`,
+        subtitle: `В работе (${timerLabel.value})`,
+      },
+    })
+  }
+  for (const op of operationHistory.value.slice(-8)) {
+    const at = new Date(op.endISO).getTime()
+    items.push({
+      at,
+      item: {
+        id: `op-${op.id}`,
+        isActive: false,
+        timeLabel: `${formatJournalTime(op.startISO)} - ${formatJournalTime(op.endISO)}`,
+        title: op.operation || 'Операция',
+        subtitle: `${op.fieldName ?? 'Без поля'} (${op.durationMinutes} мин)`,
+      },
+    })
+  }
+  for (const d of downtimeHistory.value.slice(-8)) {
+    const at = new Date(d.endISO).getTime()
+    items.push({
+      at,
+      item: {
+        id: `down-${d.id}`,
+        isActive: false,
+        timeLabel: `${formatJournalTime(d.startISO)} - ${formatJournalTime(d.endISO)}`,
+        title: `Простой — ${d.reason}`,
+        subtitle: `${d.fieldName ?? 'Без поля'} (${d.durationMinutes} мин)`,
+      },
+    })
+  }
+  return items
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 8)
+    .map((x) => x.item)
+})
 
 const circleFieldLabel = computed(() => active.value?.fieldName ?? currentField.value?.name ?? 'Поле не выбрано')
 const circleTaskLabel = computed(
@@ -261,43 +437,48 @@ const progressPercent = 65
 const progressDone = 32
 const progressTotal = 50
 
-const todayKey = computed(() => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-})
+function priorityLabel(priority: string): string {
+  return priority === 'high' ? 'Высокий' : priority === 'low' ? 'Низкий' : 'Обычный'
+}
 
-const todayTasks = ref<CalendarTaskRow[]>([])
-const todayTasksLoading = ref(false)
-const todayTaskTogglingId = ref<string | null>(null)
+function isCalendarTaskSaving(taskId: string): boolean {
+  return calendarTaskSavingIds.value.includes(taskId)
+}
 
-const todayTasksPending = computed(() => todayTasks.value.filter((t) => !t.completed_at))
-const todayTasksDone = computed(() => todayTasks.value.filter((t) => t.completed_at))
+function formatCalendarTaskTime(task: CalendarTaskToday): string {
+  if (task.startTime && task.endTime) return `${task.startTime} - ${task.endTime}`
+  if (task.startTime) return task.startTime
+  if (task.endTime) return `до ${task.endTime}`
+  return 'Без времени'
+}
 
-async function toggleTodayTask(t: CalendarTaskRow) {
-  if (todayTaskTogglingId.value) return
-  todayTaskTogglingId.value = t.id
+async function toggleCalendarTaskCompleted(taskId: string) {
+  if (isCalendarTaskSaving(taskId) || !isSupabaseConfigured()) return
+  const idx = calendarTasksToday.value.findIndex((t) => t.id === taskId)
+  if (idx < 0) return
+  const prev = calendarTasksToday.value[idx]
+  const nextCompletedAt = prev.completedAt ? null : new Date().toISOString()
+
+  // Сначала визуальное состояние (анимация), затем запрос в БД.
+  calendarTasksToday.value = calendarTasksToday.value.map((t, i) =>
+    i === idx ? { ...t, completedAt: nextCompletedAt } : t,
+  )
+  calendarTaskSavingIds.value = [...calendarTaskSavingIds.value, taskId]
+
+  await new Promise((resolve) => setTimeout(resolve, 260))
   try {
-    await updateCalendarTask(t.id, {
-      completed_at: t.completed_at ? null : new Date().toISOString(),
-    })
-    const idx = todayTasks.value.findIndex((x) => x.id === t.id)
-    if (idx !== -1) {
-      const next = [...todayTasks.value]
-      next[idx] = {
-        ...next[idx],
-        completed_at: t.completed_at ? null : new Date().toISOString(),
-      }
-      todayTasks.value = next
-    }
-  } catch (e) {
-    console.error(e)
+    await updateCalendarTask(taskId, { completed_at: nextCompletedAt })
+  } catch {
+    calendarTasksToday.value = calendarTasksToday.value.map((t, i) =>
+      i === idx ? { ...t, completedAt: prev.completedAt } : t,
+    )
   } finally {
-    todayTaskTogglingId.value = null
+    calendarTaskSavingIds.value = calendarTaskSavingIds.value.filter((id) => id !== taskId)
   }
 }
 
-function priorityLabel(priority: string): string {
-  return priority === 'high' ? 'Высокий' : priority === 'low' ? 'Низкий' : 'Обычный'
+function openTaskInTaskManagement(task: TaskRow) {
+  void router.push({ name: 'task-management', query: { openTaskId: task.id } })
 }
 
 function startDowntime(reason: { label: string; category: DowntimeCategory }) {
@@ -394,6 +575,7 @@ function stopDowntimeWithNotes(notes?: string) {
     notes,
   }
   appendEvent(event)
+  refreshShiftHistory()
   if (isSupabaseConfigured()) {
     insertDowntime(event, auth.user.value?.id ?? null).catch(() => {})
   }
@@ -423,16 +605,22 @@ function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | nul
   const equipmentRepairNotesFinal =
     savedOp?.equipmentRepairNotes ??
     (hasEquipment && equipmentConditionRequiresNotes.value ? equipmentRepairNotes.value.trim() : null)
+  const liveNote = savedOp?.operatorNote?.trim() || ''
+  const finishNote = notes?.trim() || ''
+  const mergedNotes = [liveNote, finishNote].filter(Boolean).join('\n\n')
   const op = {
     id: now.getTime(),
     employee: employeeDisplayName.value,
+    taskId: savedOp?.taskId ?? null,
+    taskTitle: savedOp?.taskTitle ?? null,
+    taskNumber: savedOp?.taskNumber ?? null,
     fieldId: savedOp?.fieldId ?? field?.id,
     fieldName: savedOp?.fieldName ?? field?.name,
     operation: savedOp?.operation ?? field?.operation,
     startISO: workStartedAt.value,
     endISO: now.toISOString(),
     durationMinutes,
-    notes,
+    notes: mergedNotes || undefined,
     equipmentId: savedOp?.equipmentId ?? null,
     equipmentFuelPercent: equipmentFuelPercentFinal ?? null,
     equipmentFuelLeftPercent: equipmentFuelLeft ?? null,
@@ -441,6 +629,7 @@ function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | nul
     equipmentRepairNotes: equipmentRepairNotesFinal ?? null,
   }
   appendOperation(op)
+  refreshShiftHistory()
   if (isSupabaseConfigured()) {
     insertOperation(op, auth.user.value?.id ?? null).catch((e) => {
       console.error('insertOperation failed (MechanicPage)', e, { op })
@@ -451,6 +640,7 @@ function stopOperationWithNotes(notes?: string, equipmentFuelLeft?: number | nul
   saveActiveOperation(null)
   activeOperation.value = null
   workStartedAt.value = null
+  operatorNoteDraft.value = ''
 
   const uid = auth.user.value?.id
   if (uid && isSupabaseConfigured()) {
@@ -482,8 +672,14 @@ function resumeOperation() {
 }
 
 function setCurrentField(id: string) {
+  if (isFieldLocked.value) return
   if (active.value?.fieldId && active.value.fieldId === id) return
   currentFieldId.value = id
+}
+
+function pickField(id: string) {
+  setCurrentField(id)
+  isFieldsOpen.value = false
 }
 
 function startOperation(field: MechanicField) {
@@ -503,9 +699,55 @@ function startOperationByName(op: WorkOperationRow) {
     fieldId: field?.id,
     fieldName: field?.name,
     operation: op.name,
+    taskId: null,
+    taskTitle: null,
+    taskNumber: null,
   }
   isOperationsOpen.value = false
   isEquipmentChoiceOpen.value = true
+}
+
+function startOperationByTask(task: TaskRow) {
+  const field =
+    fields.value.find((f) => f.name === task.field) ??
+    fields.value.find((f) => task.field.includes(f.name))
+  if (field) setCurrentField(field.id)
+  pendingStartOperation.value = {
+    fieldId: field?.id,
+    fieldName: field?.name ?? task.field,
+    operation: task.work_type || task.title,
+    taskId: task.id,
+    taskTitle: task.title,
+    taskNumber: task.number,
+  }
+  isOperationsOpen.value = false
+  isEquipmentChoiceOpen.value = true
+}
+
+async function markTaskOperationStarted(taskId: string | null | undefined) {
+  const uid = auth.user.value?.id ?? null
+  if (!taskId || !uid || !isSupabaseConfigured()) return
+  try {
+    const task = userTasks.value.find((t) => t.id === taskId)
+    if (task && task.status === 'todo') {
+      await updateTask(task.id, { status: 'in_progress' })
+      userTasks.value = userTasks.value.map((t) =>
+        t.id === task.id ? { ...t, status: 'in_progress' } : t,
+      )
+    }
+    await addTaskEvent({
+      taskId,
+      userId: uid,
+      eventType: 'operation_started',
+      payload: {
+        fieldId: activeOperation.value?.fieldId ?? null,
+        fieldName: activeOperation.value?.fieldName ?? null,
+        operation: activeOperation.value?.operation ?? null,
+      },
+    })
+  } catch (e) {
+    console.error('markTaskOperationStarted failed', e)
+  }
 }
 
 function resetEquipmentForm() {
@@ -571,6 +813,10 @@ function startOperationConfirmedWithoutEquipment() {
     startISO,
     pausedAt: null,
     accumulatedPauseSeconds: 0,
+    taskId: pending.taskId ?? null,
+    taskTitle: pending.taskTitle ?? null,
+    taskNumber: pending.taskNumber ?? null,
+    operatorNote: null,
     fieldId: pending.fieldId,
     fieldName: pending.fieldName,
     operation: pending.operation,
@@ -582,6 +828,8 @@ function startOperationConfirmedWithoutEquipment() {
     equipmentRepairNotes: null,
   }
   saveActiveOperation(activeOperation.value)
+  operatorNoteDraft.value = ''
+  void markTaskOperationStarted(pending.taskId)
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
 
@@ -613,6 +861,10 @@ function startOperationConfirmedWithEquipment() {
     startISO,
     pausedAt: null,
     accumulatedPauseSeconds: 0,
+    taskId: pending.taskId ?? null,
+    taskTitle: pending.taskTitle ?? null,
+    taskNumber: pending.taskNumber ?? null,
+    operatorNote: null,
     fieldId: pending.fieldId,
     fieldName: pending.fieldName,
     operation: pending.operation,
@@ -624,6 +876,8 @@ function startOperationConfirmedWithEquipment() {
     equipmentRepairNotes: equipmentConditionRequiresNotes.value ? equipmentRepairNotes.value.trim() : null,
   }
   saveActiveOperation(activeOperation.value)
+  operatorNoteDraft.value = ''
+  void markTaskOperationStarted(pending.taskId)
   isEquipmentModalOpen.value = false
   isEquipmentChoiceOpen.value = false
   pendingStartOperation.value = null
@@ -640,6 +894,53 @@ function startOperationConfirmedWithEquipment() {
       operation: activeOperation.value.operation ?? null,
       equipmentId: activeOperation.value.equipmentId ?? null,
     })
+  }
+}
+
+async function saveOperatorNote() {
+  if (!activeOperation.value || !workStartedAt.value) return
+  const uid = auth.user.value?.id ?? null
+  const note = operatorNoteDraft.value.trim()
+  if (!note || operatorNoteSaving.value) return
+  operatorNoteSaving.value = true
+  try {
+    const op = activeOperation.value
+    const merged = [op.operatorNote?.trim() || '', note].filter(Boolean).join('\n')
+    const next = { ...op, operatorNote: merged }
+    activeOperation.value = next
+    saveActiveOperation(next)
+    operatorNoteDraft.value = ''
+
+    if (uid && op.taskId && isSupabaseConfigured()) {
+      await addTaskComment(op.taskId, uid, note)
+      await addTaskEvent({
+        taskId: op.taskId,
+        userId: uid,
+        eventType: 'operator_note',
+        payload: {
+          note,
+          operation: op.operation ?? null,
+          fieldName: op.fieldName ?? null,
+        },
+      })
+      const task = userTasks.value.find((t) => t.id === op.taskId)
+      if (task) {
+        const prev = task.description?.trim() ?? ''
+        const stamped = `${new Date().toLocaleString('ru-RU')} — ${note}`
+        const nextDescription = [prev, `[Оператор] ${stamped}`].filter(Boolean).join('\n')
+        await updateTask(task.id, {
+          description: nextDescription,
+          status: task.status === 'todo' ? 'in_progress' : task.status,
+        })
+        userTasks.value = userTasks.value.map((t) =>
+          t.id === task.id ? { ...t, description: nextDescription, status: task.status === 'todo' ? 'in_progress' : t.status } : t,
+        )
+      }
+    }
+  } catch (e) {
+    console.error('saveOperatorNote failed', e)
+  } finally {
+    operatorNoteSaving.value = false
   }
 }
 
@@ -680,134 +981,179 @@ function addField() {
 <template>
   <section class="mechanic-page">
     <div class="mechanic-shell">
-      <header class="mechanic-header page-enter-item">
-        <div class="mechanic-title">
-          <div class="mechanic-badge">AGRO_CTRL • Оператор</div>
-          <div class="mechanic-operator">{{ employeeDisplayName }}</div>
-        </div>
-        <div class="mechanic-status">
-          <span class="status-dot" :class="{ 'status-dot-active': !!active || !!workStartedAt }" />
-          <span class="status-text">
-            {{ statusText }}
-          </span>
-        </div>
-      </header>
-
       <main class="mechanic-main">
-        <section class="mechanic-task-block page-enter-item" style="--enter-delay: 60ms">
-          <div class="mechanic-task-label">Текущая задача</div>
-          <div class="mechanic-task-timer">{{ timerStartISO ? timerLabel : '—' }}</div>
-          <h2 class="mechanic-task-title">{{ taskTitle }}</h2>
-          <div class="mechanic-task-progress-wrap">
-            <div class="mechanic-task-progress-label">Прогресс выполнения</div>
-            <div class="mechanic-task-progress-bar">
-              <div class="mechanic-task-progress-fill" :style="{ width: progressPercent + '%' }" />
+        <section class="operator-hero page-enter-item" style="--enter-delay: 60ms">
+          <div class="operator-hero-left">
+            <span class="operator-pill">Текущая задача</span>
+            <h2 class="operator-title">{{ circleFieldLabel }}</h2>
+            <p class="operator-subtitle">{{ circleTaskLabel }}</p>
+
+            <div class="operator-time-box">
+              <div class="operator-time-label">Время в работе</div>
+              <div class="operator-time-value">{{ timerStartISO ? timerLabel : '00:00:00' }}</div>
             </div>
-            <div class="mechanic-task-progress-text">{{ progressPercent }}% ({{ progressDone }}/{{ progressTotal }} Га)</div>
+
+            <div class="operator-notes">
+              <label class="operator-notes-label" for="operator-note">Заметки оператора</label>
+              <div class="mechanic-dispatcher-wip" role="status" aria-live="polite">
+                <svg
+                  class="mechanic-wip-loader"
+                  viewBox="0 0 64 64"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path pathLength="360" d="M 56.3752 2 H 7.6248 C 7.2797 2 6.9999 2.268 6.9999 2.5985 V 61.4015 C 6.9999 61.7321 7.2797 62 7.6248 62 H 56.3752 C 56.7203 62 57.0001 61.7321 57.0001 61.4015 V 2.5985 C 57.0001 2.268 56.7203 2 56.3752 2 Z" />
+                  <path pathLength="360" d="M 55.7503 60.803 H 8.2497 V 3.1971 H 55.7503 V 60.803 Z" />
+                  <path pathLength="360" d="M 13.1528 55.5663 C 13.1528 55.8968 13.4326 56.1648 13.7777 56.1648 H 50.2223 C 50.5674 56.1648 50.8472 55.8968 50.8472 55.5663 V 8.4339 C 50.8472 8.1034 50.5674 7.8354 50.2223 7.8354 H 13.7777 C 13.4326 7.8354 13.1528 8.1034 13.1528 8.4339 V 55.5663 Z" />
+                </svg>
+                <div class="mechanic-dispatcher-wip-text">В разработке</div>
+              </div>
+            </div>
           </div>
-          <div class="mechanic-fields-header mechanic-fields-header--in-task">
-            <div class="type-label">Мои поля сегодня</div>
-            <div class="mechanic-fields-hint">Выберите поле для операции или простоя</div>
-          </div>
-          <div class="mechanic-fields-chips mechanic-fields-chips--in-task">
-            <button
-              v-for="field in fields"
-              :key="field.id"
-              class="field-chip"
-              :class="{ 'field-chip-active': currentField?.id === field.id }"
-              type="button"
-              @click="setCurrentField(field.id)"
-            >
-              <span class="field-chip-name">{{ field.name }}</span>
-              <span class="field-chip-op">{{ field.operation }}</span>
-            </button>
-            <button class="field-chip field-chip-add" type="button" @click="openAddField">
-              + Добавить поле
-            </button>
-          </div>
-          <div class="mechanic-task-actions">
-            <template v-if="!active && !workStartedAt">
-              <button
-                class="btn-operation btn-operation-downtime"
-                type="button"
-                :disabled="!currentField"
-                @click="isReasonsOpen = true"
-              >
-                Начать простой
-              </button>
-              <button
-                class="btn-operation btn-operation-start"
-                type="button"
-                :disabled="!workOperationsList.length && !fields.length"
-                @click="isOperationsOpen = true"
-              >
-                Начать операцию
-              </button>
-            </template>
-            <template v-if="!active && workStartedAt">
-              <button
-                v-if="!isOperationPaused"
-                class="btn-operation btn-operation-pause"
-                type="button"
-                @click="pauseOperation"
-              >
-                Пауза
-              </button>
+
+          <div class="operator-hero-sep" />
+
+          <div class="operator-hero-right">
+            <div class="operator-progress-head">
+              <div>
+                <div class="operator-progress-title">Прогресс выполнения</div>
+                <div class="operator-progress-meta">Обработано {{ progressDone }} из {{ progressTotal }} Га</div>
+              </div>
+              <div class="operator-progress-value">{{ progressPercent }}%</div>
+            </div>
+            <div class="operator-progress-track">
+              <div class="operator-progress-fill" :style="{ width: progressPercent + '%' }" />
+            </div>
+
+            <div class="operator-stats">
+              <div class="operator-stat-card">
+                <div class="operator-stat-label">Топливо</div>
+                <div class="operator-stat-value">{{ activeOperation?.equipmentFuelPercent ?? '—' }}%</div>
+              </div>
+            </div>
+
+            <div class="operator-actions">
+              <template v-if="!active && !workStartedAt">
+                <button
+                  class="operator-btn operator-btn-danger"
+                  type="button"
+                  :disabled="!currentField"
+                  @click="isReasonsOpen = true"
+                >
+                  Начать простой
+                </button>
+                <button
+                  class="operator-btn operator-btn-success"
+                  type="button"
+                  :disabled="!workOperationsList.length && !fields.length"
+                  @click="isOperationsOpen = true"
+                >
+                  Начать операцию
+                </button>
+              </template>
+              <template v-else-if="!active && workStartedAt">
+                <button
+                  class="operator-btn operator-btn-danger"
+                  type="button"
+                  @click="openFinishNotesModal('operation')"
+                >
+                  Завершить операцию
+                </button>
+                <button
+                  v-if="!isOperationPaused"
+                  class="operator-btn operator-btn-warning"
+                  type="button"
+                  @click="pauseOperation"
+                >
+                  Пауза / Простой
+                </button>
+                <button
+                  v-else
+                  class="operator-btn operator-btn-success"
+                  type="button"
+                  @click="resumeOperation"
+                >
+                  Продолжить
+                </button>
+              </template>
               <button
                 v-else
-                class="btn-operation btn-operation-resume"
+                class="operator-btn operator-btn-danger"
                 type="button"
-                @click="resumeOperation"
+                @click="openFinishNotesModal('downtime')"
               >
-                Продолжить
+                Завершить простой
               </button>
-              <button
-                class="btn-operation btn-operation-stop"
-                type="button"
-                @click="openFinishNotesModal('operation')"
-              >
-                Остановить операцию
-              </button>
-            </template>
-            <button
-              v-if="active"
-              class="btn-operation btn-operation-stop"
-              type="button"
-              @click="openFinishNotesModal('downtime')"
-            >
-              Завершить простой
-            </button>
+            </div>
           </div>
         </section>
 
-        <section class="mechanic-today-tasks page-enter-item" style="--enter-delay: 90ms">
-          <div class="mechanic-today-tasks-head">
-            <span class="mechanic-today-tasks-title">Задачи на сегодня</span>
-            <router-link to="/tasks" class="mechanic-today-tasks-link">Календарь</router-link>
+        <section class="operator-fields page-enter-item" style="--enter-delay: 80ms">
+          <div class="operator-fields-head">
+            <div class="operator-fields-title">Поля</div>
+            <div class="operator-fields-hint">Листайте и выберите поле</div>
           </div>
-          <div v-if="todayTasksLoading" class="mechanic-today-tasks-loading">
-            <UiLoadingBar size="compact" />
+          <div ref="fieldsDropdownRef" class="operator-fields-dropdown">
+            <button
+              type="button"
+              class="operator-fields-trigger"
+              :disabled="isFieldLocked"
+              @click="isFieldsOpen = !isFieldsOpen"
+            >
+              <span class="operator-fields-trigger-main">{{ currentField?.name ?? 'Выберите поле' }}</span>
+              <span class="operator-fields-trigger-sub">{{ currentField?.operation ?? 'Операция не выбрана' }}</span>
+              <span class="operator-fields-trigger-chev" :class="{ 'operator-fields-trigger-chev--open': isFieldsOpen }">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </span>
+            </button>
+            <div v-if="isFieldsOpen" class="operator-fields-menu">
+              <button
+                v-for="field in dropdownFields"
+                :key="field.id"
+                class="operator-fields-option"
+                :class="{ 'operator-fields-option--active': currentField?.id === field.id }"
+                type="button"
+                :disabled="isFieldLocked"
+                @click="pickField(field.id)"
+              >
+                <span class="operator-fields-option-name">{{ field.name }}</span>
+                <span class="operator-fields-option-op">{{ field.operation }}</span>
+              </button>
+              <button class="operator-fields-option operator-fields-option--add" type="button" @click="openAddField">
+                + Добавить поле
+              </button>
+            </div>
           </div>
-          <template v-else-if="todayTasks.length">
-            <div v-if="todayTasksPending.length" class="mechanic-today-tasks-group">
-              <div class="mechanic-today-tasks-group-title">К выполнению</div>
-              <ul class="mechanic-today-tasks-list">
-                <li
-                  v-for="t in todayTasksPending"
-                  :key="t.id"
-                  class="mechanic-today-task"
-                >
-                  <button
-                    type="button"
-                    class="mechanic-today-task-check"
-                    :aria-label="'Отметить выполненным'"
-                    :disabled="todayTaskTogglingId === t.id"
-                    @click="toggleTodayTask(t)"
-                  >
-                    <span class="mechanic-today-task-check-empty" />
-                  </button>
-                  <span class="mechanic-today-task-time">{{ t.start_time || '—' }}<template v-if="t.end_time">–{{ t.end_time }}</template></span>
-                  <span class="mechanic-today-task-title">{{ t.title }}</span>
+        </section>
+
+        <section class="mechanic-dashboard-grid page-enter-item" style="--enter-delay: 90ms">
+          <article class="mechanic-panel mechanic-panel-next">
+            <div class="mechanic-panel-head">
+              <h3 class="mechanic-panel-title">Следующая задача</h3>
+              <router-link to="/task-management" class="mechanic-panel-link">Все задачи</router-link>
+            </div>
+            <div v-if="userTasksLoading" class="mechanic-today-tasks-loading">
+              <UiLoadingBar size="compact" />
+            </div>
+            <ul v-else-if="nextUserTasks.length" class="mechanic-next-list">
+              <li
+                v-for="t in nextUserTasks"
+                :key="t.id"
+                class="mechanic-next-item mechanic-next-item--clickable"
+                role="button"
+                tabindex="0"
+                @click="openTaskInTaskManagement(t)"
+                @keydown.enter="openTaskInTaskManagement(t)"
+              >
+                <div class="mechanic-next-meta">
+                  <span class="mechanic-next-number">#{{ t.number }}</span>
+                  <span class="mechanic-next-field">{{ t.field }}</span>
+                </div>
+                <div class="mechanic-next-title">{{ t.title }}</div>
+                <div class="mechanic-next-actions">
                   <span
                     class="mechanic-today-task-priority"
                     :class="{
@@ -817,54 +1163,125 @@ function addField() {
                   >
                     {{ priorityLabel(t.priority) }}
                   </span>
-                </li>
-              </ul>
-            </div>
-            <div v-if="todayTasksDone.length" class="mechanic-today-tasks-group">
-              <div class="mechanic-today-tasks-group-title mechanic-today-tasks-group-title--done">Выполнено</div>
-              <ul class="mechanic-today-tasks-list">
-                <li
-                  v-for="t in todayTasksDone"
-                  :key="t.id"
-                  class="mechanic-today-task mechanic-today-task--done"
-                >
                   <button
                     type="button"
-                    class="mechanic-today-task-check"
-                    aria-label="Снять отметку"
-                    :disabled="todayTaskTogglingId === t.id"
-                    @click="toggleTodayTask(t)"
+                    class="mechanic-task-run-btn"
+                    :disabled="!!workStartedAt || !!active"
+                    @click.stop
+                    @click="startOperationByTask(t)"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M20 6L9 17l-5-5" />
-                    </svg>
+                    В работу
                   </button>
-                  <span class="mechanic-today-task-time">{{ t.start_time || '—' }}<template v-if="t.end_time">–{{ t.end_time }}</template></span>
-                  <span class="mechanic-today-task-title">{{ t.title }}</span>
-                  <span
-                    class="mechanic-today-task-priority mechanic-today-task-priority--muted"
-                    :class="{
-                      'mechanic-today-task-priority--high': t.priority === 'high',
-                      'mechanic-today-task-priority--low': t.priority === 'low',
-                    }"
-                  >
-                    {{ priorityLabel(t.priority) }}
-                  </span>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="mechanic-today-tasks-empty">Нет активных задач, назначенных на вас</p>
+
+            <div class="mechanic-calendar-block">
+              <div class="mechanic-calendar-title">Задачи из календаря (сегодня)</div>
+              <div v-if="calendarTasksLoading" class="mechanic-today-tasks-loading">
+                <UiLoadingBar size="compact" />
+              </div>
+              <ul v-else-if="calendarTasksToday.length" class="mechanic-calendar-list">
+                <li
+                  v-for="task in calendarTasksToday"
+                  :key="task.id"
+                  class="mechanic-calendar-item"
+                  :class="{ 'mechanic-calendar-item--done': !!task.completedAt }"
+                >
+                  <div class="checkbox-container">
+                    <input
+                      :id="`calendar-task-${task.id}`"
+                      class="task-checkbox"
+                      type="checkbox"
+                      :checked="!!task.completedAt"
+                      :disabled="isCalendarTaskSaving(task.id)"
+                      @change="toggleCalendarTaskCompleted(task.id)"
+                    />
+                    <label :for="`calendar-task-${task.id}`" class="checkbox-label">
+                      <div class="checkbox-box">
+                        <div class="checkbox-fill"></div>
+                        <div class="checkmark">
+                          <svg viewBox="0 0 24 24" class="check-icon">
+                            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"></path>
+                          </svg>
+                        </div>
+                        <div class="success-ripple"></div>
+                      </div>
+                      <span class="checkbox-text">{{ task.title }}</span>
+                    </label>
+                  </div>
+                  <div class="mechanic-calendar-meta">
+                    <span class="mechanic-calendar-time">{{ formatCalendarTaskTime(task) }}</span>
+                    <span
+                      class="mechanic-today-task-priority"
+                      :class="{
+                        'mechanic-today-task-priority--high': task.priority === 'high',
+                        'mechanic-today-task-priority--low': task.priority === 'low',
+                      }"
+                    >
+                      {{ priorityLabel(task.priority) }}
+                    </span>
+                    <span v-if="isCalendarTaskSaving(task.id)" class="mechanic-calendar-saving">Сохранение...</span>
+                  </div>
                 </li>
               </ul>
+              <p v-else class="mechanic-today-tasks-empty">На сегодня в календаре задач нет</p>
             </div>
-          </template>
-          <p v-else class="mechanic-today-tasks-empty">На сегодня задач нет</p>
-        </section>
+          </article>
 
-        <section class="mechanic-cards page-enter-item" style="--enter-delay: 120ms">
-          <div class="mechanic-card mechanic-card-weather">
-            <div class="mechanic-card-title">Метеоусловия</div>
-            <WeatherWidgetCompact />
-            <div class="mechanic-weather-permit">
-              Погодные условия оптимальны для пахоты. Влажность почвы в норме.
+          <article class="mechanic-panel mechanic-panel-middle">
+            <div class="mechanic-panel-head">
+              <h3 class="mechanic-panel-title">Техника</h3>
             </div>
-          </div>
+            <div v-if="hasActiveTaskOperation && activeOperation?.equipmentId" class="mechanic-equipment-hero">
+              <div class="mechanic-equipment-hero-label">Активная задача</div>
+              <div class="mechanic-equipment-hero-title">{{ activeTaskLabel }}</div>
+              <div class="mechanic-equipment-hero-sub">{{ activeEquipmentLabel }}</div>
+              <div class="mechanic-equipment-hero-chip">
+                Топливо: {{ activeOperation?.equipmentFuelPercent ?? '—' }}%
+              </div>
+            </div>
+            <div v-else class="mechanic-equipment-empty">
+              Техника появится после старта операции по задаче и выбора техники.
+            </div>
+            <div class="mechanic-dispatcher-card">
+              <div class="mechanic-dispatcher-title">Связь с диспетчером</div>
+              <div class="mechanic-dispatcher-wip" role="status" aria-live="polite">
+                <svg
+                  class="mechanic-wip-loader"
+                  viewBox="0 0 64 64"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path pathLength="360" d="M 56.3752 2 H 7.6248 C 7.2797 2 6.9999 2.268 6.9999 2.5985 V 61.4015 C 6.9999 61.7321 7.2797 62 7.6248 62 H 56.3752 C 56.7203 62 57.0001 61.7321 57.0001 61.4015 V 2.5985 C 57.0001 2.268 56.7203 2 56.3752 2 Z" />
+                  <path pathLength="360" d="M 55.7503 60.803 H 8.2497 V 3.1971 H 55.7503 V 60.803 Z" />
+                  <path pathLength="360" d="M 13.1528 55.5663 C 13.1528 55.8968 13.4326 56.1648 13.7777 56.1648 H 50.2223 C 50.5674 56.1648 50.8472 55.8968 50.8472 55.5663 V 8.4339 C 50.8472 8.1034 50.5674 7.8354 50.2223 7.8354 H 13.7777 C 13.4326 7.8354 13.1528 8.1034 13.1528 8.4339 V 55.5663 Z" />
+                </svg>
+                <div class="mechanic-dispatcher-wip-text">В разработке</div>
+              </div>
+            </div>
+          </article>
+
+          <article class="mechanic-panel mechanic-panel-journal">
+            <div class="mechanic-panel-head">
+              <h3 class="mechanic-panel-title">Журнал смены</h3>
+            </div>
+            <ul class="mechanic-journal-list">
+              <li v-if="!shiftJournalItems.length" class="mechanic-journal-empty">
+                Записей пока нет. После начала или завершения операции здесь появится история смены.
+              </li>
+              <li v-for="item in shiftJournalItems" :key="item.id" class="mechanic-journal-item">
+                <span class="mechanic-journal-dot" :class="{ 'mechanic-journal-dot--active': item.isActive }" />
+                <div class="mechanic-journal-content">
+                  <div class="mechanic-journal-time">{{ item.timeLabel }}</div>
+                  <div class="mechanic-journal-title">{{ item.title }}</div>
+                  <div class="mechanic-journal-sub">{{ item.subtitle }}</div>
+                </div>
+              </li>
+            </ul>
+          </article>
         </section>
       </main>
     </div>
@@ -1194,10 +1611,10 @@ function addField() {
 
 <style scoped>
 .mechanic-page {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: stretch;
-  justify-content: center;
+  justify-content: stretch;
   background: var(--bg-base);
   background-image: var(--bg-body-image);
   color: var(--text-primary);
@@ -1205,9 +1622,10 @@ function addField() {
 
 .mechanic-shell {
   flex: 1;
-  max-width: 1000px;
+  max-width: 1400px;
   width: 100%;
-  padding: var(--space-lg) var(--space-md);
+  margin: 0 auto;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-xl);
@@ -1258,6 +1676,421 @@ function addField() {
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-xl);
+}
+
+.operator-hero {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+  padding: var(--space-lg);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  gap: var(--space-lg);
+}
+
+.operator-hero-sep {
+  background: linear-gradient(to bottom, transparent, var(--border-color), transparent);
+}
+
+.operator-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+  color: var(--accent-green);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.operator-title {
+  margin: 10px 0 2px;
+  font-size: 2rem;
+  line-height: 1.05;
+  font-weight: 900;
+  color: var(--text-primary);
+}
+
+.operator-subtitle {
+  margin: 0;
+  font-size: 2rem;
+  line-height: 1.05;
+  font-weight: 900;
+  color: var(--accent-green);
+}
+
+.operator-time-box {
+  margin-top: var(--space-md);
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+}
+
+.operator-time-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.operator-time-value {
+  font-size: 2rem;
+  line-height: 1;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.operator-notes {
+  margin-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.operator-notes-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  font-weight: 800;
+}
+
+.operator-notes-input {
+  width: 100%;
+  min-height: 56px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+  padding: 10px;
+  color: var(--text-primary);
+  resize: vertical;
+  font-family: inherit;
+}
+
+.operator-notes-save {
+  align-self: flex-end;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-green);
+  background: var(--accent-green);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 0 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.operator-notes-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.operator-hero-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.operator-progress-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.operator-progress-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.operator-progress-meta {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.operator-progress-value {
+  font-size: 2rem;
+  line-height: 1;
+  font-weight: 900;
+  color: var(--accent-green);
+}
+
+.operator-progress-track {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  overflow: hidden;
+}
+
+.operator-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent-green) 80%, #fff) 0%, var(--accent-green) 100%);
+  transition: width 0.3s ease;
+}
+
+.operator-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operator-stat-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-base);
+  padding: 12px;
+}
+
+.operator-stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  font-weight: 800;
+}
+
+.operator-stat-value {
+  margin-top: 4px;
+  font-size: 1.5rem;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.operator-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: auto;
+}
+
+.operator-btn {
+  position: relative;
+  z-index: 0;
+  overflow: visible;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.operator-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.operator-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: -1;
+  transition: transform 0.4s ease, opacity 0.4s ease;
+  background: var(--operator-btn-after-bg, var(--bg-panel));
+}
+
+.operator-btn:hover:not(:disabled) {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+.operator-btn:active:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+}
+
+.operator-btn:hover:not(:disabled)::after {
+  transform: scaleX(1.4) scaleY(1.6);
+  opacity: 0;
+}
+
+.operator-btn-danger {
+  --operator-btn-after-bg: color-mix(in srgb, var(--danger-red) 20%, var(--bg-panel));
+  background: color-mix(in srgb, var(--danger-red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger-red) 32%, transparent);
+  color: var(--danger-red);
+}
+
+.operator-btn-warning {
+  --operator-btn-after-bg: color-mix(in srgb, var(--warning-orange) 20%, var(--bg-panel));
+  background: color-mix(in srgb, var(--warning-orange) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warning-orange) 32%, transparent);
+  color: var(--warning-orange);
+}
+
+.operator-btn-success {
+  --operator-btn-after-bg: color-mix(in srgb, var(--accent-green) 24%, var(--bg-panel));
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
+  color: var(--accent-green);
+}
+
+.operator-fields {
+  position: relative;
+  z-index: 35;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  padding: var(--space-md);
+}
+
+.operator-fields-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.operator-fields-title {
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.operator-fields-hint {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.operator-fields-list {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.operator-fields-list .field-chip {
+  flex: 0 0 auto;
+}
+
+.operator-fields-dropdown {
+  position: relative;
+}
+
+.operator-fields-trigger {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
+.operator-fields-trigger:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.operator-fields-trigger-main {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.operator-fields-trigger-sub {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.operator-fields-trigger-chev {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  transition: transform 0.2s ease;
+}
+
+.operator-fields-trigger-chev--open {
+  transform: rotate(180deg);
+}
+
+.operator-fields-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
+  max-height: min(280px, 45vh);
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.operator-fields-option {
+  border: 1px solid transparent;
+  background: var(--bg-base);
+  border-radius: 10px;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.operator-fields-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.operator-fields-option:hover {
+  border-color: var(--border-color);
+}
+
+.operator-fields-option-name {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.operator-fields-option-op {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.operator-fields-option--active {
+  border-color: color-mix(in srgb, var(--accent-green) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+}
+
+.operator-fields-option--add {
+  color: var(--accent-green);
+  font-weight: 700;
 }
 
 .mechanic-task-block {
@@ -1326,6 +2159,57 @@ function addField() {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-md);
+}
+
+.mechanic-operator-notes {
+  margin-bottom: var(--space-md);
+}
+
+.mechanic-operator-notes-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+}
+
+.mechanic-operator-notes-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.mechanic-operator-notes-input {
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-primary);
+  font-family: inherit;
+  resize: vertical;
+}
+
+.mechanic-operator-notes-save {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-green);
+  background: var(--accent-green);
+  color: #fff;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mechanic-operator-notes-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .mechanic-fields-header--in-task {
@@ -1504,6 +2388,25 @@ function addField() {
   opacity: 0.85;
 }
 
+.mechanic-task-run-btn {
+  border: 1px solid var(--accent-green);
+  background: var(--accent-green);
+  color: #fff;
+  border-radius: 8px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mechanic-task-run-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .mechanic-today-task--done .mechanic-today-task-title {
   text-decoration: line-through;
   color: var(--text-secondary);
@@ -1601,6 +2504,510 @@ function addField() {
   gap: var(--space-md);
 }
 
+.mechanic-dashboard-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.mechanic-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  padding: var(--space-md);
+}
+
+.mechanic-panel-next {
+  grid-column: span 4;
+}
+
+.mechanic-panel-middle {
+  grid-column: span 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.mechanic-panel-journal {
+  grid-column: span 4;
+}
+
+.mechanic-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: var(--space-sm);
+}
+
+.mechanic-panel-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.mechanic-panel-link {
+  font-size: 0.8rem;
+  color: var(--accent-green);
+  text-decoration: none;
+}
+
+.mechanic-next-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mechanic-next-item {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--bg-base);
+}
+
+.mechanic-next-item--clickable {
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.mechanic-next-item--clickable:hover {
+  border-color: color-mix(in srgb, var(--accent-green) 45%, var(--border-color));
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+}
+
+.mechanic-next-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.mechanic-next-title {
+  margin-top: 4px;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.mechanic-next-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.mechanic-calendar-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.mechanic-calendar-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.mechanic-calendar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mechanic-calendar-item {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-base);
+  padding: 8px 10px;
+}
+
+.mechanic-calendar-item--done {
+  opacity: 0.92;
+}
+
+.mechanic-calendar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-left: 42px;
+  flex-wrap: wrap;
+}
+
+.mechanic-calendar-time {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.mechanic-calendar-saving {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.checkbox-container {
+  display: inline-block;
+  user-select: none;
+}
+
+.task-checkbox {
+  display: none;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;
+  color: var(--text-primary);
+  font-weight: 500;
+  transition: all 0.2s ease;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.checkbox-label:hover {
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+}
+
+.checkbox-box {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  margin-right: 12px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.checkbox-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent-green) 85%, #fff) 0%,
+    var(--accent-green) 100%
+  );
+  transform: scale(0);
+  transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  border-radius: 4px;
+  opacity: 0;
+}
+
+.checkmark {
+  position: relative;
+  z-index: 2;
+  opacity: 0;
+  transform: scale(0.3) rotate(20deg);
+  transition: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.check-icon {
+  width: 14px;
+  height: 14px;
+  fill: white;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+
+.success-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: color-mix(in srgb, var(--accent-green) 40%, transparent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.checkbox-text {
+  transition: all 0.3s ease;
+  position: relative;
+  font-size: 0.9rem;
+}
+
+.checkbox-text::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--text-secondary);
+  transition: width 0.4s ease;
+  transform: translateY(-50%);
+}
+
+.checkbox-label:hover .checkbox-box {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 16%, transparent);
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-box {
+  border-color: var(--accent-green);
+  background: var(--accent-green);
+  box-shadow:
+    0 4px 12px color-mix(in srgb, var(--accent-green) 30%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--accent-green) 20%, transparent);
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-fill {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.task-checkbox:checked + .checkbox-label .checkmark {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+  animation: checkPop 0.3s ease-out 0.2s;
+}
+
+.task-checkbox:checked + .checkbox-label .success-ripple {
+  animation: rippleSuccess 0.6s ease-out;
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-text {
+  color: var(--text-secondary);
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-text::after {
+  width: 100%;
+}
+
+.checkbox-label:active .checkbox-box {
+  transform: scale(0.95);
+}
+
+@keyframes checkPop {
+  0% {
+    transform: scale(1) rotate(0deg);
+  }
+  50% {
+    transform: scale(1.2) rotate(-5deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes rippleSuccess {
+  0% {
+    width: 0;
+    height: 0;
+    opacity: 0.6;
+  }
+  70% {
+    width: 50px;
+    height: 50px;
+    opacity: 0.3;
+  }
+  100% {
+    width: 60px;
+    height: 60px;
+    opacity: 0;
+  }
+}
+
+.mechanic-equipment-hero {
+  border-radius: 12px;
+  padding: 14px;
+  color: #fff;
+  background: linear-gradient(145deg, #1f2937 0%, #0f172a 100%);
+}
+
+.mechanic-equipment-hero-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+}
+
+.mechanic-equipment-hero-title {
+  margin-top: 4px;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.mechanic-equipment-hero-sub {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.mechanic-equipment-hero-chip {
+  margin-top: 10px;
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.mechanic-equipment-empty {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+}
+
+.mechanic-dispatcher-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--bg-base);
+}
+
+.mechanic-dispatcher-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.mechanic-dispatcher-btn {
+  width: 100%;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mechanic-dispatcher-wip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-panel);
+}
+
+.mechanic-wip-loader {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.mechanic-wip-loader path {
+  stroke: currentColor;
+  stroke-width: 0.75px;
+  fill: none;
+  animation:
+    mechanic-wip-dash-array 4s ease-in-out infinite,
+    mechanic-wip-dash-offset 4s linear infinite;
+}
+
+.mechanic-dispatcher-wip-text {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+}
+
+@keyframes mechanic-wip-dash-array {
+  0% {
+    stroke-dasharray: 0 1 359 0;
+  }
+  50% {
+    stroke-dasharray: 0 359 1 0;
+  }
+  100% {
+    stroke-dasharray: 359 1 0 0;
+  }
+}
+
+@keyframes mechanic-wip-dash-offset {
+  0% {
+    stroke-dashoffset: 365;
+  }
+  100% {
+    stroke-dashoffset: 5;
+  }
+}
+
+.mechanic-journal-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.mechanic-journal-empty {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 8px 2px;
+}
+
+.mechanic-journal-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.mechanic-journal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: #cbd5e1;
+  flex-shrink: 0;
+}
+
+.mechanic-journal-dot--active {
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.2);
+}
+
+.mechanic-journal-time {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mechanic-journal-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.mechanic-journal-sub {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
 .mechanic-card {
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
@@ -1650,6 +3057,11 @@ function addField() {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.mechanic-card-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
 }
 
 .mechanic-card-badge {
@@ -1934,7 +3346,7 @@ function addField() {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 40;
+  z-index: 120;
   animation: mechanicFadeIn 0.2s ease;
 }
 
@@ -1950,6 +3362,8 @@ function addField() {
   padding: var(--space-lg);
   box-shadow: var(--shadow-card), 0 20px 40px rgba(0, 0, 0, 0.2);
   animation: mechanicModalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  max-height: min(88vh, 760px);
+  overflow-y: auto;
 }
 
 [data-theme='dark'] .modal {
@@ -2204,7 +3618,7 @@ function addField() {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.25s ease;
-  z-index: 20;
+  z-index: 100;
 }
 
 .sheet-backdrop-open {
@@ -2224,8 +3638,10 @@ function addField() {
   transform: translateY(100%);
   transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   padding: var(--space-md) var(--space-lg) calc(var(--space-lg) + env(safe-area-inset-bottom, 0));
-  z-index: 30;
+  z-index: 110;
   box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
+  max-height: min(84vh, 760px);
+  overflow-y: auto;
 }
 
 .sheet-open {
@@ -2313,22 +3729,78 @@ function addField() {
   .mechanic-cards {
     grid-template-columns: 1fr;
   }
+
+  .mechanic-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mechanic-panel-next,
+  .mechanic-panel-middle,
+  .mechanic-panel-journal {
+    grid-column: span 1;
+  }
 }
 
 @media (max-width: 768px) {
-  .mechanic-shell {
-    padding: var(--space-md);
-    gap: var(--space-lg);
-  }
+  .mechanic-shell { gap: var(--space-lg); }
 
   .mechanic-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: 8px;
+  }
+
+  .mechanic-status {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-panel);
   }
 
   .mechanic-task-block {
     padding: var(--space-md);
+  }
+
+  .operator-hero {
+    grid-template-columns: 1fr;
+    gap: var(--space-md);
+  }
+
+  .operator-hero-sep {
+    display: none;
+  }
+
+  .operator-title,
+  .operator-subtitle {
+    font-size: 1.4rem;
+  }
+
+  .operator-time-value {
+    font-size: 1.5rem;
+  }
+
+  .operator-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .operator-btn {
+    min-height: 46px;
+    font-size: 0.74rem;
+    letter-spacing: 0.06em;
+  }
+
+  .mechanic-panel {
+    padding: var(--space-sm);
+    border-radius: 14px;
+  }
+
+  .mechanic-panel-title {
+    font-size: 0.95rem;
+  }
+
+  .operator-fields-list {
+    gap: 6px;
   }
 
   .mechanic-task-title {
@@ -2337,6 +3809,14 @@ function addField() {
 
   .mechanic-task-actions {
     flex-direction: column;
+  }
+
+  .mechanic-operator-notes-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mechanic-operator-notes-save {
+    width: 100%;
   }
 
   .btn-operation {
@@ -2365,12 +3845,15 @@ function addField() {
     width: 100%;
     justify-content: space-between;
   }
+
+  .operator-fields-list .field-chip {
+    width: auto;
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 480px) {
-  .mechanic-shell {
-    padding: var(--space-md) var(--space-sm);
-  }
+  .mechanic-shell { padding: 0; }
 
   .mechanic-task-block {
     padding: var(--space-md);
@@ -2382,6 +3865,10 @@ function addField() {
 
   .mechanic-task-title {
     font-size: 1rem;
+  }
+
+  .operator-stats {
+    grid-template-columns: 1fr;
   }
 
   .mechanic-today-task {
@@ -2404,9 +3891,14 @@ function addField() {
     border-radius: 10px;
   }
 
+  .operator-fields-list {
+    flex-direction: row;
+  }
+
   .modal {
     width: min(100vw - 32px, 360px);
     padding: var(--space-md);
+    max-height: 86vh;
   }
 
   .modal-actions {
@@ -2420,10 +3912,80 @@ function addField() {
   }
 }
 
-@media (min-width: 768px) {
-  .mechanic-shell {
-    padding-inline: var(--space-xl);
+@media (max-width: 640px) {
+  .mechanic-shell { gap: var(--space-md); }
+
+  .operator-hero {
+    padding: var(--space-md);
+    border-radius: 16px;
   }
+
+  .operator-time-box,
+  .operator-stat-card {
+    padding: 10px 12px;
+  }
+
+  .operator-time-value,
+  .operator-progress-value {
+    font-size: 1.35rem;
+  }
+
+  .operator-fields {
+    padding: 10px;
+  }
+
+  .operator-fields-menu {
+    top: calc(100% + 6px);
+    border-radius: 10px;
+    padding: 4px;
+    max-height: 40vh;
+  }
+
+  .mechanic-dashboard-grid {
+    gap: var(--space-sm);
+  }
+
+  .mechanic-next-item {
+    padding: 8px;
+  }
+
+  .mechanic-calendar-meta {
+    padding-left: 0;
+  }
+
+  .checkbox-label {
+    padding: 6px;
+  }
+
+  .checkbox-box {
+    width: 20px;
+    height: 20px;
+    margin-right: 10px;
+  }
+
+  .sheet {
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    padding: var(--space-sm) var(--space-md) calc(var(--space-md) + env(safe-area-inset-bottom, 0));
+    max-height: 82vh;
+  }
+
+  .sheet-button {
+    padding: 12px 0;
+  }
+
+  .modal-backdrop {
+    padding: 8px;
+  }
+
+  .modal {
+    width: min(100vw - 16px, 520px);
+    border-radius: 14px;
+  }
+}
+
+@media (min-width: 768px) {
+  .mechanic-shell { padding-inline: 0; }
 }
 </style>
 

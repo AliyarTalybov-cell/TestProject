@@ -1,6 +1,9 @@
 export type StoredOperation = {
   id: number
   employee: string
+  taskId?: string | null
+  taskTitle?: string | null
+  taskNumber?: number | null
   fieldId?: string
   fieldName?: string
   operation?: string
@@ -20,6 +23,10 @@ export type ActiveOperation = {
   startISO: string
   pausedAt?: string | null
   accumulatedPauseSeconds?: number
+  taskId?: string | null
+  taskTitle?: string | null
+  taskNumber?: number | null
+  operatorNote?: string | null
   fieldId?: string
   fieldName?: string
   operation?: string

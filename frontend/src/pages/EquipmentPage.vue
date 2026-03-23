@@ -955,9 +955,8 @@ async function exportToPdf() {
 
 <style scoped>
 .equipment-page {
-  padding: 0 var(--space-lg);
-  padding-bottom: var(--space-xl);
-  max-width: 1200px;
+  padding: 0;
+  max-width: 1400px;
   margin: 0 auto;
 }
 

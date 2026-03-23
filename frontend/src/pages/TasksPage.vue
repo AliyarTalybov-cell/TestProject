@@ -78,6 +78,7 @@ const assigneePickerOpen = ref(false)
 const assigneeSearch = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const taskFilesByTaskId = ref<Record<string, CalendarTaskFileRow[]>>({})
+const taskToggleLoadingIds = ref<string[]>([])
 
 function shortTaskId(id: string): string {
   return id.replace(/-/g, '').slice(-8).toUpperCase()
@@ -554,13 +555,22 @@ async function onSubmitTask() {
 }
 
 async function toggleTaskCompleted(task: CalendarTask) {
+  if (taskToggleLoadingIds.value.includes(task.id)) return
+  const prevCompletedAt = task.completedAt
+  const nextCompletedAt = task.completedAt ? null : new Date().toISOString()
+  task.completedAt = nextCompletedAt
+  taskToggleLoadingIds.value = [...taskToggleLoadingIds.value, task.id]
   try {
+    // Сначала показываем анимацию переключения, затем отправляем запрос.
+    await new Promise((resolve) => setTimeout(resolve, 260))
     await updateCalendarTask(task.id, {
-      completed_at: task.completedAt ? null : new Date().toISOString(),
+      completed_at: nextCompletedAt,
     })
-    await loadTasksFromDb()
   } catch (e) {
+    task.completedAt = prevCompletedAt
     console.error(e)
+  } finally {
+    taskToggleLoadingIds.value = taskToggleLoadingIds.value.filter((id) => id !== task.id)
   }
 }
 
@@ -753,20 +763,29 @@ async function confirmDeleteTask() {
           >
             <!-- Uiverse / JkHuger: анимация чекбокса + подпись (название задачи) -->
             <div class="task-cal-head" @click.stop>
-              <div class="task-cal-checkbox-ui">
-                <!-- Галочка рисуется на .task-cal-mark: псевдоэлементы у <input> в браузерах часто не работают -->
+              <div class="checkbox-container">
                 <input
                   type="checkbox"
-                  class="task-cal-input"
+                  class="task-checkbox"
+                  :id="`task-check-${task.id}`"
                   :checked="!!task.completedAt"
+                  :disabled="taskToggleLoadingIds.includes(task.id)"
                   :aria-label="task.completedAt ? 'Снять отметку о выполнении' : 'Отметить выполненным'"
-                  @click.prevent="toggleTaskCompleted(task)"
+                  @change="toggleTaskCompleted(task)"
                 />
-                <span class="task-cal-mark" aria-hidden="true" />
+                <label :for="`task-check-${task.id}`" class="checkbox-label">
+                  <div class="checkbox-box">
+                    <div class="checkbox-fill"></div>
+                    <div class="checkmark">
+                      <svg viewBox="0 0 24 24" class="check-icon">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"></path>
+                      </svg>
+                    </div>
+                    <div class="success-ripple"></div>
+                  </div>
+                  <span class="checkbox-text">{{ task.title }}</span>
+                </label>
               </div>
-              <span class="task-cal-label" @click.prevent="toggleTaskCompleted(task)">
-                {{ task.title }}
-              </span>
             </div>
             <div
               class="day-task-main"
@@ -1946,117 +1965,178 @@ async function confirmDeleteTask() {
 }
 
 .task-cal-head {
-  display: grid;
-  grid-template-columns: auto 1fr;
+  display: flex;
   align-items: center;
-  column-gap: 12px;
   min-width: 0;
 }
 
-/* ——— Квадратный чекбокс: невидимый input + видимая рамка и анимация галочки на span ——— */
-.task-cal-checkbox-ui {
-  position: relative;
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  align-self: center;
+.checkbox-container {
+  display: inline-block;
+  user-select: none;
 }
 
-.task-cal-input[type='checkbox'] {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  opacity: 0.001;
+.task-checkbox {
+  display: none;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
   cursor: pointer;
-  box-sizing: border-box;
-}
-
-.task-cal-mark {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  box-sizing: border-box;
-  border-radius: 4px;
-  background: var(--task-cal-bg);
-  box-shadow: inset 0 0 0 2px var(--border-color);
-}
-
-.task-cal-mark::before,
-.task-cal-mark::after {
-  content: '';
-  position: absolute;
-  height: 2px;
-  top: auto;
-  background: var(--task-cal-check);
-  border-radius: 2px;
-}
-
-.task-cal-mark::before {
-  width: 0;
-  right: 60%;
-  transform-origin: right bottom;
-}
-
-.task-cal-mark::after {
-  width: 0;
-  left: 40%;
-  transform-origin: left bottom;
-}
-
-.task-cal-input[type='checkbox']:checked ~ .task-cal-mark::before {
-  animation: task-cal-check-01 0.4s ease forwards;
-}
-
-.task-cal-input[type='checkbox']:checked ~ .task-cal-mark::after {
-  animation: task-cal-check-02 0.4s ease forwards;
-}
-
-.task-cal-input[type='checkbox']:not(:checked) ~ .task-cal-mark::before,
-.task-cal-input[type='checkbox']:not(:checked) ~ .task-cal-mark::after {
-  width: 0 !important;
-  animation: none;
-  transform: none;
-  top: auto;
-}
-
-.task-cal-input[type='checkbox']:focus-visible ~ .task-cal-mark {
-  box-shadow:
-    inset 0 0 0 2px var(--border-color),
-    0 0 0 2px color-mix(in srgb, var(--task-cal-check) 45%, transparent);
-}
-
-.task-cal-label {
-  color: var(--task-cal-text);
-  position: relative;
-  cursor: pointer;
-  display: block;
-  width: fit-content;
-  max-width: 100%;
-  min-width: 0;
+  font-size: 0.95rem;
+  color: var(--text-primary);
   font-weight: 600;
+  transition: all 0.2s ease;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.checkbox-label:hover {
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+}
+
+.checkbox-box {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  margin-right: 12px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.checkbox-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent-green) 85%, #fff) 0%,
+    var(--accent-green) 100%
+  );
+  transform: scale(0);
+  transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  border-radius: 4px;
+  opacity: 0;
+}
+
+.checkmark {
+  position: relative;
+  z-index: 2;
+  opacity: 0;
+  transform: scale(0.3) rotate(20deg);
+  transition: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.check-icon {
+  width: 14px;
+  height: 14px;
+  fill: white;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+
+.success-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: color-mix(in srgb, var(--accent-green) 40%, transparent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.checkbox-text {
+  transition: all 0.3s ease;
+  position: relative;
   font-size: 0.95rem;
   line-height: 1.3;
-  margin: 0;
-  padding-right: 4px;
-  text-decoration: none;
-  text-decoration-thickness: 2px;
-  text-decoration-color: var(--task-cal-disabled);
-  transition:
-    color 0.25s ease,
-    text-decoration-color 0.25s ease;
 }
 
-.day-task--completed .task-cal-label {
-  color: var(--task-cal-disabled);
-  text-decoration: line-through;
+.checkbox-text::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--text-secondary);
+  transition: width 0.4s ease;
+  transform: translateY(-50%);
 }
 
-.day-task:not(.day-task--completed) .task-cal-label {
-  color: var(--task-cal-text);
-  text-decoration: none;
+.checkbox-label:hover .checkbox-box {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 16%, transparent);
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-box {
+  border-color: var(--accent-green);
+  background: var(--accent-green);
+  box-shadow:
+    0 4px 12px color-mix(in srgb, var(--accent-green) 30%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--accent-green) 20%, transparent);
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-fill {
+  transform: scale(1);
+  opacity: 1;
+}
+
+.task-checkbox:checked + .checkbox-label .checkmark {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+  animation: checkPop 0.3s ease-out 0.2s;
+}
+
+.task-checkbox:checked + .checkbox-label .success-ripple {
+  animation: rippleSuccess 0.6s ease-out;
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-text {
+  color: var(--text-secondary);
+}
+
+.task-checkbox:checked + .checkbox-label .checkbox-text::after {
+  width: 100%;
+}
+
+.checkbox-label:active .checkbox-box {
+  transform: scale(0.95);
+}
+
+@keyframes checkPop {
+  0% { transform: scale(1) rotate(0deg); }
+  50% { transform: scale(1.2) rotate(-5deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+@keyframes rippleSuccess {
+  0% {
+    width: 0;
+    height: 0;
+    opacity: 0.6;
+  }
+  70% {
+    width: 50px;
+    height: 50px;
+    opacity: 0.3;
+  }
+  100% {
+    width: 60px;
+    height: 60px;
+    opacity: 0;
+  }
 }
 
 .day-task-main {
@@ -2078,74 +2158,6 @@ async function confirmDeleteTask() {
 .day-task--completed .day-task-time,
 .day-task--completed .day-task-desc {
   opacity: 0.8;
-}
-
-@keyframes task-cal-check-01 {
-  0% {
-    width: 4px;
-    top: auto;
-    transform: rotate(0);
-  }
-  50% {
-    width: 0;
-    top: auto;
-    transform: rotate(0);
-  }
-  51% {
-    width: 0;
-    top: 10px;
-    transform: rotate(45deg);
-  }
-  100% {
-    width: 5px;
-    top: 10px;
-    transform: rotate(45deg);
-  }
-}
-
-@keyframes task-cal-check-02 {
-  0% {
-    width: 4px;
-    top: auto;
-    transform: rotate(0);
-  }
-  50% {
-    width: 0;
-    top: auto;
-    transform: rotate(0);
-  }
-  51% {
-    width: 0;
-    top: 10px;
-    transform: rotate(-45deg);
-  }
-  100% {
-    width: 10px;
-    top: 10px;
-    transform: rotate(-45deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::before,
-  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::after {
-    animation: none !important;
-  }
-
-  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::before {
-    width: 5px;
-    top: 10px;
-    right: auto;
-    left: 3px;
-    transform: rotate(45deg);
-  }
-
-  .task-cal-input[type='checkbox']:checked ~ .task-cal-mark::after {
-    width: 10px;
-    top: 10px;
-    left: 6px;
-    transform: rotate(-45deg);
-  }
 }
 
 .day-task-time {

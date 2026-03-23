@@ -72,6 +72,13 @@ const cropLabel = computed(() => {
   return c?.label || field.value?.crop_key || '—'
 })
 
+const displayFieldNumber = computed(() => {
+  const name = field.value?.name ?? ''
+  const match = name.match(/№\s*(\d+)/)
+  if (match?.[1]) return match[1]
+  return field.value?.number != null ? String(field.value.number) : '—'
+})
+
 const createdFormatted = computed(() => {
   const raw = field.value?.created_at
   if (!raw) return '—'
@@ -407,9 +414,9 @@ watch(
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
             </span>
             <div class="field-details-title-block">
-              <h1 class="field-details-name">Поле №{{ field.number }} — {{ isEditing ? editForm.name : cropLabel }}</h1>
+              <h1 class="field-details-name">{{ isEditing ? editForm.name : field.name }}</h1>
               <p class="field-details-meta">
-                № {{ field.number }} · {{ isEditing ? editForm.area : field.area }} га
+                № {{ displayFieldNumber }} · {{ isEditing ? editForm.area : field.area }} га
                 <span class="field-details-status" v-if="!isEditing">
                   <span class="field-details-status-dot" aria-hidden="true"></span>
                   Активно

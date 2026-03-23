@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onActivated } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import { useAuth } from '@/stores/auth'
@@ -41,6 +41,7 @@ type Task = TaskType
 
 const auth = useAuth()
 const route = useRoute()
+const router = useRouter()
 const viewMode = ref<ViewMode>('kanban')
 
 const activeFilter = ref<FilterKey>('all')
@@ -227,11 +228,31 @@ function applyAnalyticsQueryParams() {
   }
 }
 
-onMounted(() => {
+async function syncOpenTaskFromQuery() {
+  const raw = route.query.openTaskId
+  const openTaskId = typeof raw === 'string' ? raw : ''
+  if (!openTaskId) return
+  const task = tasks.value.find((t) => t.id === openTaskId)
+  if (!task) return
+  await openTask(task.id)
+}
+
+onMounted(async () => {
   applyAnalyticsQueryParams()
-  loadData()
+  await loadData()
+  await syncOpenTaskFromQuery()
 })
-onActivated(loadData)
+onActivated(async () => {
+  await loadData()
+  await syncOpenTaskFromQuery()
+})
+
+watch(
+  () => route.query.openTaskId,
+  async () => {
+    await syncOpenTaskFromQuery()
+  },
+)
 
 const form = ref({
   title: '',
@@ -663,6 +684,11 @@ function closeTask() {
   taskEvents.value = []
   newCommentMessage.value = ''
   isEditingDetail.value = false
+  if (route.query.openTaskId) {
+    const rest = { ...route.query }
+    delete rest.openTaskId
+    void router.replace({ query: rest })
+  }
 }
 
 async function updateTaskStatus(taskId: string, newStatus: Status) {
