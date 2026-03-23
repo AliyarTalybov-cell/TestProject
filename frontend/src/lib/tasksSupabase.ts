@@ -243,6 +243,18 @@ export type LoadTasksFilterOpts = {
   limit?: number
 }
 
+export type LoadTasksPageOpts = {
+  assigneeId?: string
+  status?: TaskStatus
+  page?: number
+  pageSize?: number
+}
+
+export type TaskRowsPage = {
+  rows: TaskRow[]
+  total: number
+}
+
 /** Загрузка задач с фильтрами для поиска по номеру (бекенд). */
 export async function loadTasksFiltered(
   onlyMine: boolean,
@@ -261,6 +273,35 @@ export async function loadTasksFiltered(
   const { data, error } = await q.limit(limit)
   if (error) throw error
   return (data ?? []) as TaskRow[]
+}
+
+/** Серверная пагинация задач (без клиентской нарезки). */
+export async function loadTasksFilteredPage(
+  onlyMine: boolean,
+  userId: string,
+  opts: LoadTasksPageOpts = {},
+): Promise<TaskRowsPage> {
+  if (!supabase) return { rows: [], total: 0 }
+  const safePage = Math.max(1, Math.floor(opts.page ?? 1))
+  const safePageSize = Math.min(100, Math.max(1, Math.floor(opts.pageSize ?? 10)))
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
+
+  let q = supabase
+    .from('tasks')
+    .select('id, number, assignee_id, created_by, title, priority, field, due_date, status, work_type, description, created_at, updated_at', {
+      count: 'exact',
+    })
+    .order('created_at', { ascending: false })
+    .range(from, to)
+
+  if (onlyMine) q = q.eq('assignee_id', userId)
+  if (opts.assigneeId) q = q.eq('assignee_id', opts.assigneeId)
+  if (opts.status) q = q.eq('status', opts.status)
+
+  const { data, count, error } = await q
+  if (error) throw error
+  return { rows: (data ?? []) as TaskRow[], total: Number(count ?? 0) }
 }
 
 export function tasksWithAssignees(rows: TaskRow[], profiles: ProfileRow[]): Task[] {

@@ -92,12 +92,23 @@ const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_
 const pageNumbers = computed(() => {
   const total = totalPages.value
   const current = currentPage.value
-  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
   const pages: (number | 'ellipsis')[] = [1]
-  if (current > 2) pages.push('ellipsis')
-  if (current > 1 && current < total) pages.push(current)
-  if (current < total - 1) pages.push('ellipsis')
-  if (total > 1) pages.push(total)
+  if (current <= 4) {
+    for (let p = 2; p <= 5; p += 1) pages.push(p)
+    pages.push('ellipsis')
+    pages.push(total)
+    return pages
+  }
+  if (current >= total - 3) {
+    pages.push('ellipsis')
+    for (let p = total - 4; p <= total; p += 1) pages.push(p)
+    return pages
+  }
+  pages.push('ellipsis')
+  for (let p = current - 1; p <= current + 1; p += 1) pages.push(p)
+  pages.push('ellipsis')
+  pages.push(total)
   return pages
 })
 

@@ -8,8 +8,8 @@ import CalendarPopover from '@/components/CalendarPopover.vue'
 import {
   isSupabaseConfigured,
   loadProfiles,
-  loadTasksFromSupabase,
   loadTasksFiltered,
+  loadTasksFilteredPage,
   tasksWithAssignees,
   createTask as createTaskApi,
   updateTask as updateTaskApi,
@@ -42,22 +42,14 @@ type Task = TaskType
 const auth = useAuth()
 const route = useRoute()
 const viewMode = ref<ViewMode>('kanban')
-function dateToYyyyMmDd(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-const today = dateToYyyyMmDd(new Date())
-const weekAgo = dateToYyyyMmDd(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
 
 const activeFilter = ref<FilterKey>('all')
 const filterEmployeeId = ref<string>('')
 const filterStatus = ref<Status | ''>('')
-const filterDateFrom = ref<string>(weekAgo)
-const filterDateTo = ref<string>(today)
-const dateFromInput = ref<string>(weekAgo)
-const dateToInput = ref<string>(today)
+const filterDateFrom = ref<string>('')
+const filterDateTo = ref<string>('')
+const dateFromInput = ref<string>('')
+const dateToInput = ref<string>('')
 const searchTaskNumber = ref('')
 let searchByNumberTimeout: ReturnType<typeof setTimeout> | null = null
 const currentPage = ref(1)
@@ -71,6 +63,8 @@ let clickAfterDragGuard = false
 
 const tasksLoading = ref(true)
 const tasks = ref<Task[]>([])
+const serverTotal = ref(0)
+const serverPagingMode = ref(false)
 const profiles = ref<ProfileRow[]>([])
 const taskComments = ref<TaskCommentRow[]>([])
 const taskEvents = ref<TaskEventRow[]>([])
@@ -166,13 +160,30 @@ async function loadData() {
     fields.value = fieldRows.map((f) => f.name).sort((a, b) => a.localeCompare(b, 'ru-RU'))
     workTypes.value = workOps.map((op: WorkOperationRow) => op.name)
     const onlyMine = auth.userRole.value === 'worker'
-    const rows = await loadTasksFiltered(onlyMine, user.id, {
-      status: filterStatus.value || undefined,
-      assigneeId: filterEmployeeId.value || undefined,
-    })
-    tasks.value = tasksWithAssignees(rows, profileList)
+    const hasClientOnlyFilters = Boolean(searchTaskNumber.value.trim() || filterDateFrom.value || filterDateTo.value)
+
+    if (!hasClientOnlyFilters) {
+      serverPagingMode.value = true
+      const page = await loadTasksFilteredPage(onlyMine, user.id, {
+        status: filterStatus.value || undefined,
+        assigneeId: filterEmployeeId.value || undefined,
+        page: currentPage.value,
+        pageSize: pageSize.value,
+      })
+      tasks.value = tasksWithAssignees(page.rows, profileList)
+      serverTotal.value = page.total
+    } else {
+      serverPagingMode.value = false
+      const rows = await loadTasksFiltered(onlyMine, user.id, {
+        status: filterStatus.value || undefined,
+        assigneeId: filterEmployeeId.value || undefined,
+      })
+      tasks.value = tasksWithAssignees(rows, profileList)
+      serverTotal.value = 0
+    }
   } catch {
     tasks.value = []
+    serverTotal.value = 0
   } finally {
     tasksLoading.value = false
   }
@@ -279,7 +290,7 @@ const filteredTasks = computed(() => {
   return list
 })
 
-const totalFiltered = computed(() => filteredTasks.value.length)
+const totalFiltered = computed(() => (serverPagingMode.value ? serverTotal.value : filteredTasks.value.length))
 const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 
 const paginationStart = computed(() => (currentPage.value - 1) * pageSize.value + 1)
@@ -290,12 +301,23 @@ const paginationEnd = computed(() =>
 const pageNumbers = computed(() => {
   const total = totalPages.value
   const current = currentPage.value
-  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
   const pages: (number | 'ellipsis')[] = [1]
-  if (current > 2) pages.push('ellipsis')
-  if (current > 1 && current < total) pages.push(current)
-  if (current < total - 1) pages.push('ellipsis')
-  if (total > 1) pages.push(total)
+  if (current <= 4) {
+    for (let p = 2; p <= 5; p += 1) pages.push(p)
+    pages.push('ellipsis')
+    pages.push(total)
+    return pages
+  }
+  if (current >= total - 3) {
+    pages.push('ellipsis')
+    for (let p = total - 4; p <= total; p += 1) pages.push(p)
+    return pages
+  }
+  pages.push('ellipsis')
+  for (let p = current - 1; p <= current + 1; p += 1) pages.push(p)
+  pages.push('ellipsis')
+  pages.push(total)
   return pages
 })
 
@@ -304,6 +326,7 @@ function goToPage(page: number) {
 }
 
 const paginatedTasks = computed(() => {
+  if (serverPagingMode.value) return filteredTasks.value
   const list = filteredTasks.value
   const start = (currentPage.value - 1) * pageSize.value
   return list.slice(start, start + pageSize.value)
@@ -353,6 +376,11 @@ watch(
 watch(searchTaskNumber, () => { currentPage.value = 1 })
 watch(totalPages, (pages) => {
   if (currentPage.value > pages) currentPage.value = Math.max(1, pages)
+})
+watch([currentPage, pageSize], () => {
+  if (!isSupabaseConfigured() || !auth.user.value) return
+  if (searchTaskNumber.value.trim()) return
+  void loadData()
 })
 
 async function searchTaskByNumber() {

@@ -58,6 +58,28 @@ export type EquipmentOperationHistoryRow = {
   fieldName?: string | null
 }
 
+export type EquipmentOperationHistoryPage = {
+  rows: EquipmentOperationHistoryRow[]
+  total: number
+}
+
+export type FieldOperationHistoryRow = {
+  id: number
+  employee: string
+  operation: string | null
+  startISO: string
+  endISO: string
+  durationMinutes: number
+  notes?: string | null
+  equipmentId?: string | null
+  equipmentLabel?: string | null
+}
+
+export type FieldOperationHistoryPage = {
+  rows: FieldOperationHistoryRow[]
+  total: number
+}
+
 function isMissingColumnError(err: unknown): boolean {
   const e = err as { code?: string; message?: string }
   const code = e?.code
@@ -259,27 +281,34 @@ export async function loadOperationsByEquipmentFromSupabase(
   equipmentId: string,
   onlyCurrentUser: boolean,
   userId: string | null,
-): Promise<EquipmentOperationHistoryRow[]> {
-  if (!supabase) return []
+  page = 1,
+  pageSize = 5,
+): Promise<EquipmentOperationHistoryPage> {
+  if (!supabase) return { rows: [], total: 0 }
 
   const sb = supabase
   const baseSelect = 'id, user_id, employee, field_name, operation, start_iso, end_iso, duration_minutes, notes'
   const equipmentSelect = 'equipment_id, equipment_fuel_percent, equipment_condition_value, equipment_condition_label, equipment_repair_notes'
   const equipmentFuelLeftSelect = 'equipment_fuel_left_percent'
+  const safePage = Math.max(1, Math.floor(page))
+  const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)))
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
 
-  const attempt = async (select: string): Promise<EquipmentOperationHistoryRow[]> => {
+  const attempt = async (select: string): Promise<EquipmentOperationHistoryPage> => {
     let q = sb
       .from('operations')
-      .select(select)
+      .select(select, { count: 'exact' })
       .eq('equipment_id', equipmentId)
       .order('start_iso', { ascending: false })
+      .range(from, to)
 
     if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
 
-    const { data, error } = await q
+    const { data, count, error } = await q
     if (error) throw error
 
-    return (data ?? []).map((r: any) => ({
+    const rows = (data ?? []).map((r: any) => ({
       id: r.id as number,
       employee: r.employee as string,
       operation: (r.operation ?? null) as string | null,
@@ -295,6 +324,7 @@ export async function loadOperationsByEquipmentFromSupabase(
       equipmentRepairNotes: r.equipment_repair_notes ?? undefined,
       fieldName: r.field_name ?? undefined,
     }))
+    return { rows, total: Number(count ?? 0) }
   }
 
   try {
@@ -314,6 +344,56 @@ export async function loadOperationsByEquipmentFromSupabase(
       return attempt(baseSelect)
     }
   }
+}
+
+export async function loadOperationsByFieldFromSupabase(
+  fieldId: string,
+  onlyCurrentUser: boolean,
+  userId: string | null,
+  page = 1,
+  pageSize = 5,
+): Promise<FieldOperationHistoryPage> {
+  if (!supabase) return { rows: [], total: 0 }
+
+  const sb = supabase
+  const baseSelect = 'id, user_id, employee, operation, start_iso, end_iso, duration_minutes, notes, equipment_id'
+  const equipmentJoin = 'equipment:equipment_id(id, brand, model, license_plate)'
+  const safePage = Math.max(1, Math.floor(page))
+  const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)))
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
+
+  let q = sb
+    .from('operations')
+    .select(`${baseSelect}, ${equipmentJoin}`, { count: 'exact' })
+    .eq('field_id', fieldId)
+    .order('start_iso', { ascending: false })
+    .range(from, to)
+
+  if (onlyCurrentUser && userId) q = q.eq('user_id', userId)
+
+  const { data, count, error } = await q
+  if (error) throw error
+
+  const rows = (data ?? []).map((r: any) => {
+    const eq = r.equipment as { brand?: string | null; model?: string | null; license_plate?: string | null } | null
+    const equipmentLabel =
+      eq && (eq.brand || eq.model || eq.license_plate)
+        ? [eq.brand, eq.model, eq.license_plate].filter(Boolean).join(' • ')
+        : null
+    return {
+      id: r.id as number,
+      employee: r.employee as string,
+      operation: (r.operation ?? null) as string | null,
+      startISO: r.start_iso as string,
+      endISO: r.end_iso as string,
+      durationMinutes: r.duration_minutes as number,
+      notes: (r.notes ?? null) as string | null,
+      equipmentId: (r.equipment_id ?? null) as string | null,
+      equipmentLabel,
+    }
+  })
+  return { rows, total: Number(count ?? 0) }
 }
 
 export { isSupabaseConfigured }

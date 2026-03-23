@@ -763,10 +763,15 @@ function cropPillClass(f: Field): string {
 const paginationPages = computed(() => {
   const total = totalPages.value
   const cur = currentPage.value
-  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
-  if (cur <= 3) return [1, 2, 3, '...', total]
-  if (cur >= total - 2) return [1, '...', total - 2, total - 1, total]
-  return [1, '...', cur, '...', total]
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
+  const pages: (number | string)[] = [1]
+  const start = Math.max(2, cur - 1)
+  const end = Math.min(total - 1, cur + 1)
+  if (start > 2) pages.push('...')
+  for (let p = start; p <= end; p += 1) pages.push(p)
+  if (end < total - 1) pages.push('...')
+  pages.push(total)
+  return pages
 })
 
 function updateFieldName(id: string, name: string) {
@@ -787,10 +792,15 @@ const refsPageCrops = ref(1)
 
 function refsPaginationPages(total: number, cur: number): (number | string)[] {
   const totalP = Math.max(1, total)
-  if (totalP <= 5) return Array.from({ length: totalP }, (_, i) => i + 1)
-  if (cur <= 3) return [1, 2, 3, '...', totalP]
-  if (cur >= totalP - 2) return [1, '...', totalP - 2, totalP - 1, totalP]
-  return [1, '...', cur, '...', totalP]
+  if (totalP <= 7) return Array.from({ length: totalP }, (_, i) => i + 1)
+  const pages: (number | string)[] = [1]
+  const start = Math.max(2, cur - 1)
+  const end = Math.min(totalP - 1, cur + 1)
+  if (start > 2) pages.push('...')
+  for (let p = start; p <= end; p += 1) pages.push(p)
+  if (end < totalP - 1) pages.push('...')
+  pages.push(totalP)
+  return pages
 }
 
 const downtimeReasons = ref<DowntimeReasonRow[]>([])

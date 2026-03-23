@@ -49,6 +49,7 @@ const profiles = ref<ProfileRow[]>([])
 
 const historyLoading = ref(false)
 const history = ref<EquipmentOperationHistoryRow[]>([])
+const historyTotal = ref(0)
 
 function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—'
@@ -177,20 +178,17 @@ function initHistoryExpanded() {
 const historyPage = ref(1)
 const historyPageSize = ref(5)
 
-const historyTotalFiltered = computed(() => history.value.length)
-const historyTotalPages = computed(() => Math.max(1, Math.ceil(historyTotalFiltered.value / historyPageSize.value)))
+const historyTotalFiltered = computed(() => historyTotal.value)
+const historyTotalPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / historyPageSize.value)))
 
 const historyPaginationStart = computed(() =>
-  historyTotalFiltered.value ? (historyPage.value - 1) * historyPageSize.value + 1 : 0,
+  historyTotal.value ? (historyPage.value - 1) * historyPageSize.value + 1 : 0,
 )
 const historyPaginationEnd = computed(() =>
-  Math.min(historyPage.value * historyPageSize.value, historyTotalFiltered.value),
+  Math.min(historyPage.value * historyPageSize.value, historyTotal.value),
 )
 
-const paginatedHistory = computed(() => {
-  const start = (historyPage.value - 1) * historyPageSize.value
-  return history.value.slice(start, start + historyPageSize.value)
-})
+const paginatedHistory = computed(() => history.value)
 
 const paginatedHistoryVm = computed(() =>
   paginatedHistory.value.map((h) => ({ h, visual: operationVisual(h.operation) })),
@@ -199,12 +197,23 @@ const paginatedHistoryVm = computed(() =>
 const historyPageNumbers = computed(() => {
   const total = historyTotalPages.value
   const current = historyPage.value
-  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
   const pages: (number | 'ellipsis')[] = [1]
-  if (current > 2) pages.push('ellipsis')
-  if (current > 1 && current < total) pages.push(current)
-  if (current < total - 1) pages.push('ellipsis')
-  if (total > 1) pages.push(total)
+  if (current <= 4) {
+    for (let p = 2; p <= 5; p += 1) pages.push(p)
+    pages.push('ellipsis')
+    pages.push(total)
+    return pages
+  }
+  if (current >= total - 3) {
+    pages.push('ellipsis')
+    for (let p = total - 4; p <= total; p += 1) pages.push(p)
+    return pages
+  }
+  pages.push('ellipsis')
+  for (let p = current - 1; p <= current + 1; p += 1) pages.push(p)
+  pages.push('ellipsis')
+  pages.push(total)
   return pages
 })
 
@@ -214,12 +223,17 @@ function goHistoryPage(page: number) {
 
 watch(historyPageSize, () => {
   historyPage.value = 1
+  void refreshHistory()
 })
 
-watch(historyTotalFiltered, () => {
+watch(historyTotal, () => {
   if (historyPage.value > historyTotalPages.value) {
     historyPage.value = Math.max(1, historyTotalPages.value)
   }
+})
+
+watch(historyPage, () => {
+  void refreshHistory()
 })
 
 const mainMedia = computed(() => {
@@ -282,9 +296,12 @@ async function refreshHistory() {
   try {
     const onlyMine = !isManager.value
     const userId = auth.user.value?.id ?? null
-    history.value = await loadOperationsByEquipmentFromSupabase(id, onlyMine, userId)
+    const page = await loadOperationsByEquipmentFromSupabase(id, onlyMine, userId, historyPage.value, historyPageSize.value)
+    history.value = page.rows
+    historyTotal.value = page.total
   } catch {
     history.value = []
+    historyTotal.value = 0
   } finally {
     historyLoading.value = false
     initHistoryExpanded()
