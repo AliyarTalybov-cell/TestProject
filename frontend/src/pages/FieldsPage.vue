@@ -2547,7 +2547,7 @@ onMounted(async () => {
 
 .field-card.is-active {
   border-color: var(--accent-green);
-  box-shadow: 0 0 0 1px rgba(104, 173, 51, 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-green) 40%, transparent);
 }
 
 .field-image {
@@ -3418,20 +3418,20 @@ onMounted(async () => {
 [data-theme='dark'] .modal.modal-fields--add .modal-input,
 [data-theme='dark'] .modal.modal-fields--add .modal-select,
 [data-theme='dark'] .modal.modal-fields--add .modal-textarea {
-  background: rgba(0, 0, 0, 0.35);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--bg-panel) 72%, black);
+  border-color: var(--border-color);
   color: #fff;
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-input::placeholder,
 [data-theme='dark'] .modal.modal-fields--add .modal-textarea::placeholder {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--text-secondary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-input:focus,
 [data-theme='dark'] .modal.modal-fields--add .modal-select:focus,
 [data-theme='dark'] .modal.modal-fields--add .modal-textarea:focus {
   border-color: var(--accent-green);
-  background: rgba(0, 0, 0, 0.4);
-  box-shadow: 0 0 0 2px rgba(104, 173, 51, 0.25);
+  background: color-mix(in srgb, var(--bg-panel) 64%, black);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-green) 24%, transparent);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-select {
   background-color: rgba(0, 0, 0, 0.35);
@@ -3454,7 +3454,7 @@ onMounted(async () => {
   color: rgba(255, 255, 255, 0.7);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-dropzone-label:hover {
-  background: rgba(104, 173, 51, 0.15);
+  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
   border-color: var(--accent-green);
   color: var(--accent-green);
 }
@@ -3462,17 +3462,17 @@ onMounted(async () => {
   color: rgba(255, 255, 255, 0.45);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-actions--fields {
-  background: rgba(0, 0, 0, 0.25);
-  border-top-color: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--bg-panel) 78%, black);
+  border-top-color: var(--border-color);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-btn-ghost {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.9);
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 22%, var(--border-color));
+  color: var(--text-primary);
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-btn-ghost:hover {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
   color: #fff;
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-btn {

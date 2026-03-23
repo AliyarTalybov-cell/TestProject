@@ -2462,7 +2462,7 @@ function addField() {
 
 .btn-operation-start:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px -2px rgba(104, 173, 51, 0.4);
+  box-shadow: 0 4px 12px -2px color-mix(in srgb, var(--accent-green) 42%, transparent);
 }
 
 .btn-operation-stop {
@@ -2495,7 +2495,7 @@ function addField() {
 
 .btn-operation-resume:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px -2px rgba(104, 173, 51, 0.4);
+  box-shadow: 0 4px 12px -2px color-mix(in srgb, var(--accent-green) 42%, transparent);
 }
 
 .mechanic-cards {
@@ -3279,7 +3279,7 @@ function addField() {
   background: var(--accent-green);
   color: #fff;
   transform: translateY(-2px);
-  box-shadow: 0 2px 8px -2px rgba(104, 173, 51, 0.4);
+  box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--accent-green) 42%, transparent);
 }
 
 [data-theme="dark"] .field-chip-active {
@@ -3324,7 +3324,7 @@ function addField() {
 
 .btn-main:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px -2px rgba(104, 173, 51, 0.4);
+  box-shadow: 0 4px 12px -2px color-mix(in srgb, var(--accent-green) 42%, transparent);
 }
 
 .btn-stop {
@@ -3367,8 +3367,8 @@ function addField() {
 }
 
 [data-theme='dark'] .modal {
-  background: rgba(18, 32, 20, 0.98);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-color: var(--border-color);
 }
 
 @keyframes mechanicFadeIn {

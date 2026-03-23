@@ -666,7 +666,7 @@ const fieldsWithWeather = computed(() => {
 }
 
 .weather-crop-icon.corn {
-  background: rgba(104, 173, 51, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
   color: var(--accent-green);
 }
 
@@ -681,7 +681,7 @@ const fieldsWithWeather = computed(() => {
 }
 
 .weather-crop-status.ok {
-  background: rgba(104, 173, 51, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
   color: var(--accent-green);
 }
 

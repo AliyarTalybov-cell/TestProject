@@ -1195,7 +1195,7 @@ onUnmounted(() => {
 }
 .dash-kpi--click:hover {
   border-color: var(--accent-green, #2d5a3d);
-  box-shadow: 0 4px 14px rgba(45, 90, 61, 0.12);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-green) 20%, transparent);
 }
 
 .dash-kpi-sublabel {

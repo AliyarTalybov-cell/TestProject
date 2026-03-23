@@ -99,10 +99,12 @@ watch(
     <div class="sidebar-overlay" aria-hidden="true" @click="closeMobileMenu"></div>
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <span class="sidebar-brand-icon" aria-hidden="true">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
-        </span>
-        <span class="sidebar-brand-text">Агро-контроль</span>
+        <RouterLink class="sidebar-brand-link" to="/dashboard" data-text="АГРОСИСТЕМА" aria-label="АГРОСИСТЕМА">
+          <span class="sidebar-brand-title-wrap">
+            <span class="actual-text"><span>АГРО</span><span class="actual-text-accent">СИСТЕМА</span></span>
+            <span aria-hidden="true" class="hover-text"><span>АГРО</span><span>СИСТЕМА</span></span>
+          </span>
+        </RouterLink>
       </div>
       <nav class="sidebar-nav">
         <div class="nav-section">
@@ -338,8 +340,8 @@ watch(
 }
 
 [data-theme='dark'] .app-modal {
-  background: rgba(18, 32, 20, 0.98);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-color: var(--border-color);
 }
 
 .app-modal-header {
@@ -396,8 +398,8 @@ watch(
   background: rgba(0, 0, 0, 0.02);
 }
 [data-theme='dark'] .app-modal-footer {
-  background: rgba(18, 32, 20, 0.98);
-  border-top-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-top-color: var(--border-color);
 }
 
 .app-modal-btn {
@@ -419,7 +421,7 @@ watch(
 }
 [data-theme='dark'] .app-modal-btn--ghost {
   background: var(--bg-panel);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-color);
 }
 .app-modal-btn--danger {
   background: var(--danger-red);

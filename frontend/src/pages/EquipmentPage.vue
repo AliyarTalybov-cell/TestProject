@@ -1411,12 +1411,12 @@ async function exportToPdf() {
 }
 
 .equipment-condition-ok {
-  background: rgba(45, 90, 61, 0.12);
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
   color: #166534;
 }
 
 [data-theme='dark'] .equipment-condition-ok {
-  background: rgba(104, 173, 51, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
   color: #86efac;
 }
 

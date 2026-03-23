@@ -3201,13 +3201,13 @@ function statusClass(s: Status) {
 /* ——— Тёмная тема (Context7: опора на CSS-переменные и контраст) ——— */
 [data-theme='dark'] .task-management-page {
   --task-input-bg: rgba(0, 0, 0, 0.35);
-  --task-input-border: rgba(255, 255, 255, 0.2);
-  --task-placeholder: rgba(255, 255, 255, 0.45);
+  --task-input-border: var(--border-color);
+  --task-placeholder: var(--text-secondary);
 }
 
 [data-theme='dark'] .task-modal {
-  background: #121f14;
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-color: var(--border-color);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
 }
 
@@ -3236,10 +3236,11 @@ function statusClass(s: Status) {
 [data-theme='dark'] .task-form-priority-btn {
   background: rgba(0, 0, 0, 0.25);
   color: var(--text-primary);
+  border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-form-priority-btn--active {
-  background: #b87a50;
+  background: var(--warning-orange);
   color: #fff;
 }
 
@@ -3280,7 +3281,7 @@ function statusClass(s: Status) {
 
 [data-theme='dark'] .task-card {
   background: rgba(22, 38, 28, 0.7);
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-card:hover {
@@ -3288,7 +3289,7 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-card-avatar {
-  background: rgba(104, 173, 51, 0.3);
+  background: color-mix(in srgb, var(--accent-green) 26%, transparent);
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -3304,22 +3305,22 @@ function statusClass(s: Status) {
 }
 
 [data-theme='dark'] .task-empty-btn:hover {
-  background: rgba(104, 173, 51, 0.2);
+  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
   color: var(--accent-green-hover);
 }
 
 [data-theme='dark'] .task-list-wrap {
   background: rgba(22, 38, 28, 0.6);
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-list-avatar {
-  background: rgba(104, 173, 51, 0.3);
+  background: color-mix(in srgb, var(--accent-green) 26%, transparent);
   color: rgba(255, 255, 255, 0.9);
 }
 
 [data-theme='dark'] .task-kanban-column--drag-over .task-column-cards {
-  background: rgba(104, 173, 51, 0.15);
+  background: color-mix(in srgb, var(--accent-green) 16%, transparent);
   outline-color: var(--accent-green);
 }
 
@@ -3334,7 +3335,7 @@ function statusClass(s: Status) {
 
 [data-theme='dark'] .task-detail-btn--edit {
   background: rgba(0, 0, 0, 0.35);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--border-color);
   color: var(--text-primary);
 }
 
@@ -3344,12 +3345,12 @@ function statusClass(s: Status) {
 
 [data-theme='dark'] .task-detail-card {
   background: rgba(22, 38, 28, 0.7);
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-color);
 }
 
 [data-theme='dark'] .task-chat-input {
   background: rgba(22, 38, 28, 0.7);
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: var(--border-color);
 }
 
 @media (max-width: 1200px) {

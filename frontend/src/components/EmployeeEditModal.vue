@@ -287,8 +287,8 @@ watch(
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
 }
 [data-theme='dark'] .eem-modal {
-  background: rgba(18, 32, 20, 0.98);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-color: var(--border-color);
 }
 .eem-close {
   position: absolute;
@@ -325,8 +325,8 @@ watch(
   font-size: 0.9375rem;
 }
 .eem-msg--success {
-  background: rgba(45, 90, 61, 0.12);
-  border-color: rgba(45, 90, 61, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 28%, var(--border-color));
   color: #166534;
 }
 .eem-msg--error {
@@ -335,8 +335,8 @@ watch(
   color: var(--danger-red);
 }
 [data-theme='dark'] .eem-msg--success {
-  background: rgba(104, 173, 51, 0.2);
-  border-color: rgba(104, 173, 51, 0.35);
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
   color: #86efac;
 }
 [data-theme='dark'] .eem-msg--error {
@@ -386,8 +386,8 @@ watch(
   background: #f8faf9;
 }
 [data-theme='dark'] .eem-status-card {
-  background: rgba(18, 32, 20, 0.98);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-color: var(--border-color);
 }
 .eem-status-row {
   display: flex;
@@ -541,7 +541,7 @@ watch(
 .eem-input:focus {
   outline: none;
   border-color: var(--accent-green);
-  box-shadow: 0 0 0 3px rgba(45, 90, 61, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 16%, transparent);
 }
 .eem-input::placeholder {
   color: #94a3b8;
@@ -552,7 +552,7 @@ watch(
 }
 [data-theme='dark'] .eem-input:focus {
   background: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 0 0 3px rgba(104, 173, 51, 0.2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
 }
 .eem-textarea {
   resize: vertical;
@@ -582,8 +582,8 @@ watch(
   overflow: visible;
 }
 [data-theme='dark'] .eem-footer {
-  background: rgba(18, 32, 20, 0.98);
-  border-top-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-top-color: var(--border-color);
 }
 .eem-footer-delete {
   flex: 0 0 auto;

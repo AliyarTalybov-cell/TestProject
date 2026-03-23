@@ -779,9 +779,9 @@ async function changePassword() {
 }
 
 .profile-save-message--success {
-  background: rgba(45, 90, 61, 0.12);
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
   color: #166534;
-  border: 1px solid rgba(45, 90, 61, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 28%, var(--border-color));
 }
 
 .profile-save-message--error {
@@ -797,9 +797,9 @@ async function changePassword() {
 }
 
 [data-theme='dark'] .profile-save-message--success {
-  background: rgba(104, 173, 51, 0.2);
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
   color: #86efac;
-  border-color: rgba(104, 173, 51, 0.4);
+  border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
 }
 
 [data-theme='dark'] .profile-save-message--error {

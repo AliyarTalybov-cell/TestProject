@@ -279,7 +279,7 @@ function openEmployee(e: EmployeeRow) {
   border-color: var(--accent-green);
 }
 [data-theme='dark'] .emp-filter-select {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--bg-panel) 82%, black);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-size: 16px 16px;
@@ -307,7 +307,7 @@ function openEmployee(e: EmployeeRow) {
 }
 
 [data-theme='dark'] .emp-search-input {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--bg-panel) 82%, black);
 }
 
 .emp-search-input:focus {
@@ -494,7 +494,7 @@ function openEmployee(e: EmployeeRow) {
 }
 
 [data-theme='dark'] .emp-card-footer {
-  border-top-color: rgba(255, 255, 255, 0.08);
+  border-top-color: var(--border-color);
 }
 
 .emp-status {
@@ -538,8 +538,8 @@ function openEmployee(e: EmployeeRow) {
 }
 
 [data-theme='dark'] .emp-badge--worker {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 20%, var(--border-color));
   color: var(--text-secondary);
 }
 

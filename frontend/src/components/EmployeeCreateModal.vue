@@ -199,8 +199,8 @@ watch(
 }
 
 [data-theme='dark'] .emp-modal {
-  background: rgba(18, 32, 20, 0.98);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-color: var(--border-color);
 }
 
 .emp-modal-close {
@@ -240,8 +240,8 @@ watch(
   border: 1px solid transparent;
 }
 .emp-modal-message--success {
-  background: rgba(45, 90, 61, 0.12);
-  border-color: rgba(45, 90, 61, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 28%, var(--border-color));
   color: #166534;
 }
 .emp-modal-message--error {
@@ -251,8 +251,8 @@ watch(
 }
 
 [data-theme='dark'] .emp-modal-message--success {
-  background: rgba(104, 173, 51, 0.2);
-  border-color: rgba(104, 173, 51, 0.35);
+  background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 34%, var(--border-color));
   color: #86efac;
 }
 [data-theme='dark'] .emp-modal-message--error {
@@ -291,7 +291,7 @@ watch(
 .emp-input:focus {
   outline: none;
   border-color: var(--accent-green);
-  box-shadow: 0 0 0 3px rgba(45, 90, 61, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 16%, transparent);
 }
 .emp-input::placeholder {
   color: #94a3b8;
@@ -302,7 +302,7 @@ watch(
 }
 [data-theme='dark'] .emp-input:focus {
   background: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 0 0 3px rgba(104, 173, 51, 0.2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 22%, transparent);
 }
 
 .emp-textarea {
@@ -344,11 +344,11 @@ watch(
 }
 .emp-role-card--active {
   border-color: var(--accent-green);
-  background: rgba(45, 90, 61, 0.04);
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
 }
 [data-theme='dark'] .emp-role-card--active {
   border-color: var(--accent-green);
-  background: rgba(104, 173, 51, 0.08);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
 }
 .emp-role-radio {
   position: absolute;
@@ -374,8 +374,8 @@ watch(
   gap: 12px;
 }
 [data-theme='dark'] .emp-modal-footer {
-  background: rgba(18, 32, 20, 0.98);
-  border-top-color: rgba(255, 255, 255, 0.12);
+  background: var(--bg-panel);
+  border-top-color: var(--border-color);
 }
 
 .emp-btn {
