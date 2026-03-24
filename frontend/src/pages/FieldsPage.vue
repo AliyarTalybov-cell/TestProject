@@ -35,6 +35,7 @@ import {
 import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
 type CropKey = 'all' | 'wheat' | 'corn' | 'soy' | 'sunflower' | 'none' | 'meadow'
 
@@ -91,6 +92,9 @@ const fieldsLoading = ref(false)
 const fieldsError = ref<string | null>(null)
 const profiles = ref<ProfileRow[]>([])
 const highlightAddField = ref(false)
+const successModalOpen = ref(false)
+const successModalTitle = ref('Операция выполнена')
+const successModalMessage = ref('')
 
 function fieldRowToField(row: FieldRow, profileMap: Map<string, ProfileRow>, cropsList: CropRow[]): Field {
   const responsiblePerson = row.responsible_id ? (profileMap.get(row.responsible_id)?.display_name || profileMap.get(row.responsible_id)?.email || '') : ''
@@ -704,6 +708,9 @@ async function addField() {
     ]
     selectedFieldId.value = id
   }
+  successModalTitle.value = 'Поле добавлено'
+  successModalMessage.value = `Поле "${name}" успешно сохранено.`
+  successModalOpen.value = true
   closeFieldModal()
 }
 
@@ -1811,6 +1818,14 @@ onMounted(async () => {
       </div>
 
     </div>
+
+    <UiSuccessModal
+      :open="successModalOpen"
+      :title="successModalTitle"
+      :message="successModalMessage"
+      button-text="Понятно"
+      @close="successModalOpen = false"
+    />
   </section>
 </template>
 

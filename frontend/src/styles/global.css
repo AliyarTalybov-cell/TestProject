@@ -105,6 +105,69 @@
   border-color: var(--border-color);
 }
 
+/* Единая плавная анимация открытия модалок и подложек */
+@keyframes appModalBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes appModalContentIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-backdrop,
+.task-modal-backdrop,
+.emp-modal-backdrop,
+.eem-backdrop,
+.fields-confirm-backdrop,
+.profile-confirm-backdrop {
+  animation: appModalBackdropIn 0.2s ease-out;
+}
+
+.modal,
+.task-modal,
+.emp-modal,
+.eem-modal,
+.eem-confirm-modal,
+.fields-confirm-modal,
+.profile-confirm-modal,
+.modal-confirm,
+.app-modal {
+  animation: appModalContentIn 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .task-modal-backdrop,
+  .emp-modal-backdrop,
+  .eem-backdrop,
+  .fields-confirm-backdrop,
+  .profile-confirm-backdrop,
+  .modal,
+  .task-modal,
+  .emp-modal,
+  .eem-modal,
+  .eem-confirm-modal,
+  .fields-confirm-modal,
+  .profile-confirm-modal,
+  .modal-confirm,
+  .app-modal {
+    animation: none !important;
+  }
+}
+
 [data-theme='dark'] input,
 [data-theme='dark'] select,
 [data-theme='dark'] textarea,

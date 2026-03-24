@@ -27,6 +27,7 @@ import { loadEquipment, type EquipmentRow } from '@/lib/equipmentSupabase'
 import { loadEmployees, loadPositions, searchEmployees, type EmployeeRow, type PositionRow } from '@/lib/employeesSupabase'
 import { getOrCreateDmThread, sendChatMessage, sendChatMessageWithFile } from '@/lib/chatSupabase'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
 const DEFAULT_REASONS: Array<{ label: string; description: string; category: DowntimeCategory }> = [
   { label: 'Поломка техники', description: 'Неисправность, требующая остановки работы', category: 'breakdown' },
@@ -204,6 +205,9 @@ const issuePositions = ref<PositionRow[]>([])
 const issuePositionFilter = ref<string>('')
 const issueSearch = ref('')
 const selectedIssueRecipientIds = ref<string[]>([])
+const successModalOpen = ref(false)
+const successModalTitle = ref('Операция выполнена')
+const successModalMessage = ref('')
 
 function refreshShiftHistory() {
   operationHistory.value = loadOperations()
@@ -1197,6 +1201,9 @@ async function submitIssueToDispatcher() {
     issueReportFile.value = null
     issueDispatcherModalOpen.value = false
     issueReportSuccess.value = `Отправлено (${recipientIds.length}) как важное сообщение.`
+    successModalTitle.value = 'Сообщение отправлено'
+    successModalMessage.value = `Проблема отправлена ${recipientIds.length} получателям как важное сообщение.`
+    successModalOpen.value = true
     selectedIssueRecipientIds.value = []
   } catch (e) {
     issueReportError.value = e instanceof Error ? e.message : 'Не удалось отправить сообщение получателям'
@@ -2065,6 +2072,14 @@ function addField() {
         </div>
       </div>
     </div>
+
+    <UiSuccessModal
+      :open="successModalOpen"
+      :title="successModalTitle"
+      :message="successModalMessage"
+      button-text="Хорошо"
+      @close="successModalOpen = false"
+    />
   </section>
 </template>
 

@@ -25,6 +25,7 @@ import type { Task as TaskType, ProfileRow, TaskCommentRow, TaskEventRow } from 
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
 type ViewMode = 'kanban' | 'list'
 type FilterKey = 'all' | 'mine'
@@ -57,6 +58,7 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const showCreateModal = ref(false)
 const editingTaskId = ref<string | null>(null)
+const successModalOpen = ref(false)
 const selectedTaskId = ref<string | null>(null)
 const dragTaskId = ref<string | null>(null)
 const dragOverColumn = ref<Status | null>(null)
@@ -571,6 +573,7 @@ async function createTask() {
         auth.user.value.id,
       )
       await loadData()
+      successModalOpen.value = true
     } catch {
       // skip if no Supabase
     }
@@ -1605,6 +1608,14 @@ function statusClass(s: Status) {
         </div>
       </div>
     </Teleport>
+
+    <UiSuccessModal
+      :open="successModalOpen"
+      title="Задача создана"
+      message="Новая задача успешно добавлена."
+      button-text="Отлично"
+      @close="successModalOpen = false"
+    />
   </section>
 </template>
 

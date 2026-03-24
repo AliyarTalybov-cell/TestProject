@@ -19,6 +19,7 @@ import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import { avatarColorByPosition } from '@/lib/avatarColors'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import UiSuccessModal from '@/components/UiSuccessModal.vue'
 
 type CalendarTask = {
   id: string
@@ -64,6 +65,9 @@ const editingTaskId = ref<string | null>(null)
 const taskSaveLoading = ref(false)
 const showDeleteConfirm = ref(false)
 const deleteInProgress = ref(false)
+const successModalOpen = ref(false)
+const successModalTitle = ref('Операция выполнена')
+const successModalMessage = ref('')
 
 const taskTitle = ref('')
 const taskDescription = ref('')
@@ -547,6 +551,11 @@ async function onSubmitTask() {
     await loadTasksFromDb()
     await loadFilesForVisibleTasks()
     isTaskModalOpen.value = false
+    successModalTitle.value = editingTaskId.value ? 'Изменения сохранены' : 'Задача создана'
+    successModalMessage.value = editingTaskId.value
+      ? 'Данные задачи успешно обновлены.'
+      : 'Новая задача успешно добавлена.'
+    successModalOpen.value = true
   } catch (e) {
     console.error(e)
   } finally {
@@ -1126,6 +1135,14 @@ async function confirmDeleteTask() {
         </div>
       </div>
     </div>
+
+    <UiSuccessModal
+      :open="successModalOpen"
+      :title="successModalTitle"
+      :message="successModalMessage"
+      button-text="Отлично"
+      @close="successModalOpen = false"
+    />
   </section>
 </template>
 
