@@ -101,7 +101,7 @@ export async function loadProfiles(): Promise<ProfileRow[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, display_name, role, phone, position, additional_info, created_at, updated_at')
+    .select('id, email, display_name, role, phone, position, additional_info, last_activity_at, created_at, updated_at')
     .order('email')
   if (error) throw error
   return (data ?? []) as ProfileRow[]

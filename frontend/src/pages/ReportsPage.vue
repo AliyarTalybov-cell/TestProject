@@ -104,13 +104,21 @@ const workerProfiles = computed(() =>
 
 /** Карточки Live: работники + все, кто указан исполнителем в загруженных задачах (даже если роль «руководитель»). */
 const profilesForLiveBoard = computed(() => {
+  const dayAgoTs = Date.now() - 24 * 60 * 60 * 1000
+  const isRecent = (p: ProfileRow) => {
+    const raw = p.last_activity_at
+    if (!raw) return false
+    const ts = new Date(raw).getTime()
+    return Number.isFinite(ts) && ts >= dayAgoTs
+  }
+
   const byId = new Map<string, ProfileRow>()
   for (const p of workerProfiles.value) {
-    byId.set(p.id, p)
+    if (isRecent(p)) byId.set(p.id, p)
   }
   for (const t of tasks.value) {
     const p = profileById.value.get(t.assignee_id)
-    if (p) byId.set(p.id, p)
+    if (p && isRecent(p)) byId.set(p.id, p)
   }
   return Array.from(byId.values()).sort((a, b) => {
     const na = (a.display_name || a.email).toLowerCase()
@@ -1289,6 +1297,9 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 14px;
+  max-height: 72vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 @media (max-width: 1200px) {

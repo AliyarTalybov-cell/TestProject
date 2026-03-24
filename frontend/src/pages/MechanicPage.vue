@@ -13,7 +13,7 @@ import { loadDowntimeReasons, loadWorkOperations, isSupabaseConfigured } from '@
 import type { DowntimeReasonRow, WorkOperationRow } from '@/lib/reasonsAndOperations'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { insertDowntime, insertOperation } from '@/lib/analyticsSupabase'
-import { upsertOperatorStatus, deleteOperatorStatus } from '@/lib/operatorStatusSupabase'
+import { upsertOperatorStatus, deleteOperatorStatus, loadOperatorStatusesFromSupabase } from '@/lib/operatorStatusSupabase'
 import { loadCalendarTasks, updateCalendarTask } from '@/lib/calendarTasksSupabase'
 import { useAuth } from '@/stores/auth'
 import {
@@ -271,6 +271,57 @@ onMounted(async () => {
         } finally {
           userTasksLoading.value = false
           calendarTasksLoading.value = false
+        }
+      }
+
+      // Если локально активность не восстановилась, пробуем взять live-статус из backend (operator_status),
+      // чтобы экран оператора совпадал с аналитикой на других устройствах/браузерах.
+      if (uid && !active.value && !activeOperation.value) {
+        try {
+          const rows = await loadOperatorStatusesFromSupabase(true, uid)
+          const row = rows[0]
+          if (row?.kind === 'operation') {
+            const restored = {
+              startISO: row.started_at,
+              pausedAt: null,
+              accumulatedPauseSeconds: 0,
+              taskId: null,
+              taskTitle: null,
+              taskNumber: null,
+              operatorNote: null,
+              fieldId: row.field_id ?? undefined,
+              fieldName: row.field_name ?? undefined,
+              operation: row.operation ?? undefined,
+              employee: row.employee || employeeDisplayName.value,
+              equipmentId: row.equipment_id ?? null,
+              equipmentFuelPercent: null,
+              equipmentConditionValue: null,
+              equipmentConditionLabel: null,
+              equipmentRepairNotes: null,
+              plannedHectares: null,
+              processedHectares: null,
+            }
+            activeOperation.value = restored
+            workStartedAt.value = row.started_at
+            saveActiveOperation(restored)
+            if (restored.fieldId) currentFieldId.value = restored.fieldId
+          } else if (row?.kind === 'downtime') {
+            const restoredDown = {
+              id: Date.now(),
+              employee: row.employee || employeeDisplayName.value,
+              reason: row.downtime_reason || 'Простой',
+              category: (row.downtime_category as DowntimeCategory) || 'waiting',
+              startISO: row.started_at,
+              fieldId: row.field_id ?? undefined,
+              fieldName: row.field_name ?? undefined,
+              operation: row.operation ?? undefined,
+            }
+            active.value = restoredDown
+            saveActive(restoredDown)
+            if (restoredDown.fieldId) currentFieldId.value = restoredDown.fieldId
+          }
+        } catch (e) {
+          console.warn('restore operator status from backend failed', e)
         }
       }
     } catch {

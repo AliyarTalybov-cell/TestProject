@@ -1,6 +1,10 @@
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 
 export type EmployeeRole = 'worker' | 'manager'
+export type EmployeesPageResult = {
+  rows: EmployeeRow[]
+  total: number
+}
 
 export type EmployeeRow = {
   id: string
@@ -70,6 +74,59 @@ export async function searchEmployees(query: string, limit = 50, position: strin
     .limit(safeLimit)
   if (error) throw error
   return (data ?? []) as EmployeeRow[]
+}
+
+export async function loadEmployeesPage(
+  page = 1,
+  pageSize = 12,
+  position: string | null = null,
+): Promise<EmployeesPageResult> {
+  if (!supabase) return { rows: [], total: 0 }
+  const safePage = Math.max(1, Math.floor(page))
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize)), 200)
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
+  let q = supabase
+    .from('profiles')
+    .select(EMPLOYEE_COLUMNS, { count: 'exact' })
+  if (position) q = q.eq('position', position)
+  const { data, error, count } = await q
+    .order('updated_at', { ascending: false })
+    .range(from, to)
+  if (error) throw error
+  return { rows: (data ?? []) as EmployeeRow[], total: Number(count ?? 0) }
+}
+
+export async function searchEmployeesPage(
+  query: string,
+  page = 1,
+  pageSize = 12,
+  position: string | null = null,
+): Promise<EmployeesPageResult> {
+  if (!supabase) return { rows: [], total: 0 }
+  const q = normalizeQuery(query)
+  if (!q) return loadEmployeesPage(page, pageSize, position)
+  const safePage = Math.max(1, Math.floor(page))
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize)), 200)
+  const from = (safePage - 1) * safePageSize
+  const to = from + safePageSize - 1
+  const pattern = `%${escapeIlike(q)}%`
+  const or = [
+    `email.ilike.${pattern}`,
+    `display_name.ilike.${pattern}`,
+    `phone.ilike.${pattern}`,
+    `position.ilike.${pattern}`,
+  ].join(',')
+  let req = supabase
+    .from('profiles')
+    .select(EMPLOYEE_COLUMNS, { count: 'exact' })
+    .or(or)
+  if (position) req = req.eq('position', position)
+  const { data, error, count } = await req
+    .order('updated_at', { ascending: false })
+    .range(from, to)
+  if (error) throw error
+  return { rows: (data ?? []) as EmployeeRow[], total: Number(count ?? 0) }
 }
 
 export type CreateEmployeePayload = {

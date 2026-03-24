@@ -2,7 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuth } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
-import { loadEmployees, loadPositions, searchEmployees, type EmployeeRow, type PositionRow } from '@/lib/employeesSupabase'
+import {
+  loadPositions,
+  searchEmployeesPage,
+  loadEmployeesPage,
+  type EmployeeRow,
+  type PositionRow,
+} from '@/lib/employeesSupabase'
 import EmployeeCreateModal from '@/components/EmployeeCreateModal.vue'
 import EmployeeEditModal from '@/components/EmployeeEditModal.vue'
 import { avatarColorByPosition } from '@/lib/avatarColors'
@@ -18,6 +24,9 @@ const positions = ref<PositionRow[]>([])
 const search = ref('')
 const positionFilter = ref<string>('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+const page = ref(1)
+const pageSize = ref(5)
+const total = ref(0)
 
 const createOpen = ref(false)
 const editOpen = ref(false)
@@ -75,7 +84,16 @@ async function refresh() {
     }
     const q = search.value.trim()
     const pos = positionFilter.value.trim() || null
-    employees.value = q ? await searchEmployees(q, 200, pos) : await loadEmployees(200, pos)
+    const result = q
+      ? await searchEmployeesPage(q, page.value, pageSize.value, pos)
+      : await loadEmployeesPage(page.value, pageSize.value, pos)
+    employees.value = result.rows
+    total.value = result.total
+    const maxPage = Math.max(1, Math.ceil(total.value / pageSize.value))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      return
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Не удалось загрузить сотрудников.'
   } finally {
@@ -86,11 +104,50 @@ async function refresh() {
 onMounted(refresh)
 
 watch(search, () => {
+  page.value = 1
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(() => refresh(), 350)
 })
 
-watch(positionFilter, () => refresh())
+watch(positionFilter, () => {
+  page.value = 1
+  refresh()
+})
+watch(pageSize, () => {
+  page.value = 1
+  refresh()
+})
+watch(page, () => refresh())
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const pageStart = computed(() => (total.value ? (page.value - 1) * pageSize.value + 1 : 0))
+const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
+const pageNumbers = computed(() => {
+  const totalPagesValue = totalPages.value
+  const current = page.value
+  if (totalPagesValue <= 7) return Array.from({ length: totalPagesValue }, (_, i) => i + 1)
+  const pages: (number | 'ellipsis')[] = [1]
+  if (current <= 4) {
+    for (let p = 2; p <= 5; p += 1) pages.push(p)
+    pages.push('ellipsis')
+    pages.push(totalPagesValue)
+    return pages
+  }
+  if (current >= totalPagesValue - 3) {
+    pages.push('ellipsis')
+    for (let p = totalPagesValue - 4; p <= totalPagesValue; p += 1) pages.push(p)
+    return pages
+  }
+  pages.push('ellipsis')
+  for (let p = current - 1; p <= current + 1; p += 1) pages.push(p)
+  pages.push('ellipsis')
+  pages.push(totalPagesValue)
+  return pages
+})
+
+function goPage(next: number) {
+  page.value = Math.max(1, Math.min(next, totalPages.value))
+}
 
 function openEmployee(e: EmployeeRow) {
   selected.value = e
@@ -183,6 +240,53 @@ function openEmployee(e: EmployeeRow) {
             <span class="emp-badge" :class="roleClass(e.role)">{{ roleLabel(e.role) }}</span>
           </div>
         </article>
+      </div>
+      <div v-if="!loading && total > 0" class="emp-pagination">
+        <span class="emp-pagination-info">Показано {{ pageStart }}–{{ pageEnd }} из {{ total }}</span>
+        <div class="emp-pagination-right">
+          <label class="emp-pagination-size">
+            <span class="emp-pagination-size-label">На странице</span>
+            <select v-model.number="pageSize" class="emp-pagination-select" aria-label="На странице">
+              <option :value="5">5</option>
+              <option :value="8">8</option>
+              <option :value="12">12</option>
+              <option :value="24">24</option>
+              <option :value="48">48</option>
+            </select>
+          </label>
+          <div class="emp-pagination-btns">
+            <button
+              type="button"
+              class="emp-pagination-arrow"
+              :disabled="page <= 1"
+              aria-label="Предыдущая страница"
+              @click="goPage(page - 1)"
+            >
+              &lt;
+            </button>
+            <template v-for="(p, i) in pageNumbers" :key="p === 'ellipsis' ? `ep-${i}` : p">
+              <button
+                v-if="p !== 'ellipsis'"
+                type="button"
+                class="emp-pagination-num"
+                :class="{ 'emp-pagination-num--active': p === page }"
+                @click="goPage(p)"
+              >
+                {{ p }}
+              </button>
+              <span v-else class="emp-pagination-dots">…</span>
+            </template>
+            <button
+              type="button"
+              class="emp-pagination-arrow"
+              :disabled="page >= totalPages"
+              aria-label="Следующая страница"
+              @click="goPage(page + 1)"
+            >
+              &gt;
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -564,6 +668,163 @@ function openEmployee(e: EmployeeRow) {
   align-items: center;
   justify-content: center;
   padding: 24px 0;
+}
+
+.emp-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+  padding: var(--space-md) var(--space-lg) 0;
+  border-top: 1px solid var(--border-color);
+  min-height: 40px;
+}
+
+.emp-pagination-info {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.emp-pagination-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+}
+
+.emp-pagination-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.emp-pagination-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.emp-pagination-arrow:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  border-color: var(--text-secondary);
+}
+
+.emp-pagination-arrow:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.emp-pagination-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.emp-pagination-num:hover {
+  background: var(--bg-panel-hover);
+}
+
+.emp-pagination-num--active {
+  background: rgba(76, 175, 80, 0.15);
+  border-color: rgba(76, 175, 80, 0.5);
+  color: var(--text-primary);
+}
+
+[data-theme='dark'] .emp-pagination-num--active {
+  background: rgba(76, 175, 80, 0.2);
+  border-color: rgba(76, 175, 80, 0.5);
+}
+
+.emp-pagination-num--active:hover {
+  background: rgba(76, 175, 80, 0.22);
+}
+
+.emp-pagination-dots {
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.emp-pagination-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.emp-pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.emp-pagination-size-label {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.emp-pagination-select {
+  min-width: 72px;
+  height: 36px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fafafa;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+[data-theme='dark'] .emp-pagination-select {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+@media (max-width: 768px) {
+  .emp-pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-sm);
+    padding: var(--space-md) 0;
+  }
+
+  .emp-pagination-info {
+    text-align: center;
+  }
+
+  .emp-pagination-right {
+    justify-content: center;
+  }
+
+  .emp-pagination-btns {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .emp-pagination-size {
+    justify-content: center;
+  }
 }
 </style>
 
