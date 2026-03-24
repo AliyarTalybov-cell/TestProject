@@ -21,13 +21,7 @@ const subtitle = computed(() =>
     : 'Создайте учётную запись и начните работу с полями, задачами и аналитикой.',
 )
 const submitLabel = computed(() => (mode.value === 'login' ? 'Войти' : 'Зарегистрироваться'))
-const switchBtnLabel = computed(() =>
-  mode.value === 'login' ? 'Создать аккаунт' : 'Войти в существующий аккаунт',
-)
-
-function labelChars(text: string): string[] {
-  return text.split('')
-}
+const switchBtnLabel = computed(() => (mode.value === 'login' ? 'Создать аккаунт' : 'Войти в существующий аккаунт'))
 
 function switchMode() {
   mode.value = mode.value === 'login' ? 'register' : 'login'
@@ -71,56 +65,52 @@ async function submit() {
 
 <template>
   <div class="login-layout auth-uiview">
-    <!-- Визуал в духе Uiverse / zanina-yassine + корпоративные цвета -->
     <form class="form_container" @submit.prevent="submit">
       <div class="title_container">
         <p class="title">{{ title }}</p>
         <span class="subtitle">{{ subtitle }}</span>
       </div>
 
-      <div class="form-control">
+      <div class="input_container">
+        <label class="input_label" for="auth-email">Логин (email)</label>
+        <svg fill="none" viewBox="0 0 24 24" height="20" width="20" xmlns="http://www.w3.org/2000/svg" class="icon">
+          <path stroke-linejoin="round" stroke-linecap="round" stroke-width="1.5" stroke="currentColor" d="M7 8.5L9.942 10.239C11.657 11.254 12.343 11.254 14.058 10.239L17 8.5"></path>
+          <path stroke-linejoin="round" stroke-width="1.5" stroke="currentColor" d="M2.016 13.476C2.081 16.541 2.114 18.074 3.245 19.209C4.376 20.345 5.95 20.384 9.099 20.463C11.039 20.512 12.961 20.512 14.901 20.463C18.05 20.384 19.624 20.345 20.755 19.209C21.886 18.074 21.919 16.541 21.984 13.476C22.005 12.49 22.005 11.51 21.984 10.524C21.919 7.459 21.886 5.926 20.755 4.791C19.624 3.655 18.05 3.616 14.901 3.537C12.961 3.488 11.039 3.488 9.099 3.537C5.95 3.616 4.376 3.655 3.245 4.791C2.114 5.926 2.081 7.459 2.016 10.524C1.995 11.51 1.995 12.49 2.016 13.476Z"></path>
+        </svg>
         <input
           id="auth-email"
           v-model="email"
+          class="input_field"
+          placeholder="name@mail.com"
           type="email"
           autocomplete="email"
           required
         />
-        <label for="auth-email">
-          <span
-            v-for="(ch, i) in labelChars('Логин (email)')"
-            :key="`email-ch-${i}`"
-            :style="{ transitionDelay: `${i * 50}ms` }"
-          >{{ ch }}</span>
-        </label>
       </div>
 
-      <div class="group">
+      <div class="input_container">
+        <label class="input_label" for="auth-password">Пароль</label>
+        <svg fill="none" viewBox="0 0 24 24" height="20" width="20" xmlns="http://www.w3.org/2000/svg" class="icon">
+          <rect x="4" y="11" width="16" height="9" rx="3" stroke="currentColor" stroke-width="1.8"></rect>
+          <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+        </svg>
         <input
           id="auth-password"
           v-model="password"
-          class="input"
+          class="input_field"
           type="password"
+          placeholder="Password"
           autocomplete="current-password"
           required
         />
-        <label for="auth-password" class="group-label">
-          <span
-            v-for="(ch, i) in labelChars('Пароль')"
-            :key="`pwd-ch-${i}`"
-            :style="{ transitionDelay: `${i * 50}ms` }"
-          >{{ ch }}</span>
-        </label>
       </div>
 
       <div v-if="mode === 'register'" class="input_container input_container--select">
         <label class="input_label" for="auth-role">Роль</label>
-        <div class="input_row">
-          <select id="auth-role" v-model="role" class="input_field input_field--select">
-            <option value="worker">Работник</option>
-            <option value="manager">Руководитель</option>
-          </select>
-        </div>
+        <select id="auth-role" v-model="role" class="input_field input_field--select">
+          <option value="worker">Работник</option>
+          <option value="manager">Руководитель</option>
+        </select>
         <p class="role_hint">
           Работник видит только свои данные; руководитель — по всем сотрудникам.
         </p>
@@ -138,7 +128,7 @@ async function submit() {
         <hr class="line" />
       </div>
 
-      <button type="button" class="sign-in_secondary" @click="switchMode">
+      <button type="button" class="sign-in_ggl" @click="switchMode">
         <span>{{ switchBtnLabel }}</span>
       </button>
 
@@ -157,18 +147,17 @@ async function submit() {
   box-sizing: border-box;
 }
 
-/* Uiverse / zanina-yassine — каркас; цвета из темы (--accent-green и т.д.) */
 .form_container {
   width: fit-content;
   min-width: min(100%, 360px);
-  max-width: 400px;
+  max-width: 410px;
   height: fit-content;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   justify-content: center;
   gap: 15px;
-  padding: 40px 40px 28px;
+  padding: 50px 40px 20px;
   background-color: #ffffff;
   box-shadow:
     0px 106px 42px rgba(0, 0, 0, 0.01),
@@ -200,9 +189,9 @@ async function submit() {
 
 .subtitle {
   font-size: 0.725rem;
-  max-width: 92%;
+  max-width: 80%;
   text-align: center;
-  line-height: 1.35;
+  line-height: 1.1rem;
   color: #8b8e98;
 }
 
@@ -213,106 +202,6 @@ async function submit() {
   display: flex;
   flex-direction: column;
   gap: 5px;
-}
-
-.form-control {
-  position: relative;
-  margin: 12px 0 18px;
-  width: 100%;
-}
-
-.form-control input {
-  background-color: transparent;
-  border: 0;
-  border-bottom: 2px solid var(--border-color);
-  display: block;
-  width: 100%;
-  padding: 15px 0;
-  font-size: 18px;
-  color: var(--text-primary);
-}
-
-.form-control input:focus,
-.form-control input:valid {
-  outline: 0;
-  border-bottom-color: var(--accent-green);
-}
-
-.form-control label {
-  position: absolute;
-  top: 15px;
-  left: 0;
-  pointer-events: none;
-}
-
-.form-control label span {
-  display: inline-block;
-  font-size: 18px;
-  min-width: 5px;
-  color: var(--text-secondary);
-  transition: 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-  white-space: pre;
-}
-
-.form-control input:focus + label span,
-.form-control input:valid + label span {
-  color: var(--accent-green);
-  transform: translateY(-28px);
-}
-
-.group {
-  position: relative;
-  width: 100%;
-  margin: 12px 0 18px;
-}
-
-.group .icon {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 18px;
-  height: 18px;
-  color: var(--text-secondary);
-  pointer-events: none;
-}
-
-.group .input {
-  width: 100%;
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid var(--border-color);
-  color: var(--text-primary);
-  font-size: 18px;
-  padding: 15px 0;
-  font-family: inherit;
-}
-
-.group .input:focus {
-  outline: 0;
-  border-bottom-color: var(--accent-green);
-}
-
-.group .group-label {
-  position: absolute;
-  top: 15px;
-  left: 0;
-  pointer-events: none;
-}
-
-.group .group-label span {
-  display: inline-block;
-  font-size: 18px;
-  min-width: 5px;
-  color: var(--text-secondary);
-  transition: 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-  white-space: pre;
-}
-
-.group .input:focus + .group-label span,
-.group .input:valid + .group-label span {
-  color: var(--accent-green);
-  transform: translateY(-28px);
 }
 
 .input_container--select .role_hint {
@@ -329,23 +218,11 @@ async function submit() {
   position: absolute;
   z-index: 2;
   left: 12px;
-  bottom: 11px;
-  color: #374151;
-  pointer-events: none;
-}
-
-.input_row {
-  position: relative;
-  width: 100%;
-}
-
-.icon--inrow {
-  position: absolute;
-  left: 12px;
   top: 50%;
   bottom: auto;
-  transform: translateY(-50%);
-  z-index: 2;
+  transform: translateY(2px);
+  color: #141b34;
+  pointer-events: none;
 }
 
 .input_label {
@@ -375,7 +252,7 @@ async function submit() {
 
 .input_field:focus {
   border: 1px solid transparent;
-  box-shadow: 0 0 0 2px var(--accent-green);
+  box-shadow: 0 0 0 2px #242424;
   background-color: transparent;
 }
 
@@ -429,7 +306,7 @@ async function submit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 30px;
   color: #8b8e98;
   font-size: 0.75rem;
   font-weight: 600;
@@ -444,7 +321,7 @@ async function submit() {
   flex: 1;
 }
 
-.sign-in_secondary {
+.sign-in_ggl {
   width: 100%;
   height: 40px;
   display: flex;
@@ -461,15 +338,11 @@ async function submit() {
   font-family: inherit;
   font-size: 0.875rem;
   font-weight: 600;
-  transition:
-    border-color 0.2s ease,
-    color 0.2s ease,
-    background 0.2s ease;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
 }
 
-.sign-in_secondary:hover {
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+.sign-in_ggl:hover {
+  border-color: #d8d8d8;
 }
 
 .note {
@@ -521,21 +394,8 @@ html[data-theme='dark'] .auth-uiview .input_field {
   filter: none;
 }
 
-html[data-theme='dark'] .auth-uiview .form-control input,
-html[data-theme='dark'] .auth-uiview .group .input {
-  color: var(--text-primary);
-  border-bottom-color: var(--border-color);
-}
-
-html[data-theme='dark'] .auth-uiview .form-control label span,
-html[data-theme='dark'] .auth-uiview .group .icon {
+html[data-theme='dark'] .auth-uiview .icon {
   color: var(--text-secondary);
-}
-
-html[data-theme='dark'] .auth-uiview .form-control input:focus,
-html[data-theme='dark'] .auth-uiview .form-control input:valid,
-html[data-theme='dark'] .auth-uiview .group .input:focus {
-  border-bottom-color: var(--accent-green);
 }
 
 html[data-theme='dark'] .auth-uiview .input_field::placeholder {
@@ -543,28 +403,24 @@ html[data-theme='dark'] .auth-uiview .input_field::placeholder {
 }
 
 html[data-theme='dark'] .auth-uiview .input_field:focus {
-  box-shadow: 0 0 0 2px var(--accent-green);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.24);
   background: rgba(0, 0, 0, 0.2);
-}
-
-html[data-theme='dark'] .auth-uiview .icon {
-  color: rgba(255, 255, 255, 0.65);
 }
 
 html[data-theme='dark'] .auth-uiview .separator .line {
   background-color: var(--border-color);
 }
 
-html[data-theme='dark'] .auth-uiview .sign-in_secondary {
+html[data-theme='dark'] .auth-uiview .sign-in_ggl {
   background: rgba(0, 0, 0, 0.2);
   border-color: var(--border-color);
   color: var(--text-primary);
   filter: none;
 }
 
-html[data-theme='dark'] .auth-uiview .sign-in_secondary:hover {
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+html[data-theme='dark'] .auth-uiview .sign-in_ggl:hover {
+  border-color: color-mix(in srgb, white 35%, var(--border-color));
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .auth-uiview .auth_error {
