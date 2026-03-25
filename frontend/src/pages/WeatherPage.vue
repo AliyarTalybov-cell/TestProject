@@ -7,6 +7,7 @@ import { fetchWeather, fetchForecast5, getWeatherIconUrl, type WeatherData, type
 import { RUSSIAN_CITIES } from '@/lib/cities'
 import { useWeatherCity } from '@/composables/useWeatherCity'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import YandexMap from '@/components/YandexMap.vue'
 
 const { cityValue, setCity, city, country } = useWeatherCity()
 const weather = ref<WeatherData | null>(null)
@@ -15,6 +16,7 @@ const fields = ref<FieldRow[]>([])
 const crops = ref<CropRow[]>([])
 const loading = ref(true)
 const error = ref(false)
+const pickedCoords = ref<{ lat: number; lon: number } | null>(null)
 
 async function load() {
   loading.value = true
@@ -71,6 +73,22 @@ const windExtreme = computed(() => (weather.value?.windSpeed ?? 0) > 10)
 const tempExtreme = computed(() => {
   const t = weather.value?.temp
   return t != null && (t < -15 || t > 35)
+})
+
+const daylightDuration = computed(() => {
+  if (!weather.value?.sunrise || !weather.value?.sunset) return '—'
+  if (weather.value.sunrise === '—' || weather.value.sunset === '—') return '—'
+  
+  const parse = (time: string) => {
+    const [h, m] = time.split(':').map(Number)
+    return h * 60 + m
+  }
+  
+  const diff = parse(weather.value.sunset) - parse(weather.value.sunrise)
+  if (diff <= 0) return '—'
+  const hrs = Math.floor(diff / 60)
+  const mins = diff % 60
+  return `${hrs} ч ${mins} мин`
 })
 
 /** Класс сценки неба по condition из API (Clear, Clouds, Rain, Snow, Mist и т.д.) */
@@ -215,47 +233,48 @@ const fieldsWithWeather = computed(() => {
           <div>
             <div class="weather-indicator-label">Влажность</div>
             <div class="weather-indicator-value">{{ weather.humidity != null ? weather.humidity : '—' }}<span class="weather-indicator-muted">%</span></div>
-            <div class="weather-indicator-sub">Оптимальная</div>
+            <div class="weather-indicator-sub">{{ weather.humidity == null ? '—' : (weather.humidity < 40 ? 'Воздух очень сухой' : (weather.humidity > 80 ? 'Повышенная влажность' : 'Оптимальная')) }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-pressure"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg></div>
           <div>
             <div class="weather-indicator-label">Давление</div>
-            <div class="weather-indicator-value">{{ weather.pressure != null ? Math.round(weather.pressure * 0.75006) : '—' }}<span class="weather-indicator-muted"> мм рт.ст.</span></div>
-            <div class="weather-indicator-sub">На ур. моря: {{ weather.pressure ?? '—' }} гПа</div>
+            <div class="weather-indicator-value">{{ weather.pressure != null ? weather.pressure : '—' }}<span class="weather-indicator-muted"> мм</span></div>
+            <div class="weather-indicator-sub">Привед. к морю: {{ weather.meanSeaLevelPressure != null ? weather.meanSeaLevelPressure + ' мм' : '—' }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-visibility"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg></div>
           <div>
             <div class="weather-indicator-label">Видимость</div>
-            <div class="weather-indicator-value">{{ weather.visibility != null ? weather.visibility / 1000 : '—' }}<span class="weather-indicator-muted"> км</span></div>
-            <div class="weather-indicator-sub">Ясно, без тумана</div>
+            <div class="weather-indicator-value">{{ weather.visibility != null ? Number((weather.visibility / 1000).toFixed(1)) : '—' }}<span class="weather-indicator-muted"> км</span></div>
+            <div class="weather-indicator-sub">{{ weather.visibility == null ? '—' : (weather.visibility < 2000 ? 'Ограничена (возможен туман/осадки)' : 'Отличная видимость') }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-clouds"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg></div>
           <div>
             <div class="weather-indicator-label">Облачность</div>
-            <div class="weather-indicator-value">{{ weather.clouds != null ? weather.clouds : '—' }}<span class="weather-indicator-muted">%</span></div>
-            <div class="weather-indicator-sub">Прогресс: <span class="weather-progress"><span class="weather-progress-fill" :style="{ width: (weather.clouds ?? 0) + '%' }"></span></span></div>
+            <div class="weather-indicator-value">{{ weather.clouds != null ? weather.clouds : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.clouds != null">%</span></div>
+            <div class="weather-indicator-sub" v-if="weather.clouds != null">Прогресс: <span class="weather-progress"><span class="weather-progress-fill" :style="{ width: (weather.clouds ?? 0) + '%' }"></span></span></div>
+            <div class="weather-indicator-sub" v-else>Недоступно по тарифу</div>
           </div>
         </div>
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-precip"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" /><path d="M16 14v6" /><path d="M8 14v6" /><path d="M12 16v6" /></svg></div>
           <div>
             <div class="weather-indicator-label">Вер. осадков</div>
-            <div class="weather-indicator-value">{{ weather.clouds != null ? 100 - weather.clouds : '—' }}<span class="weather-indicator-muted">%</span></div>
-            <div class="weather-indicator-sub">Прогресс: <span class="weather-progress"><span class="weather-progress-fill weather-progress-fill-cyan" :style="{ width: (100 - (weather.clouds ?? 0)) + '%' }"></span></span></div>
+            <div class="weather-indicator-value">{{ weather.precProbability != null ? weather.precProbability : '—' }}<span class="weather-indicator-muted">%</span></div>
+            <div class="weather-indicator-sub">Прогресс: <span class="weather-progress"><span class="weather-progress-fill weather-progress-fill-cyan" :style="{ width: (weather.precProbability ?? 0) + '%' }"></span></span></div>
           </div>
         </div>
         <div class="weather-indicator-card">
           <div class="weather-indicator-icon weather-icon-uv"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></svg></div>
           <div>
             <div class="weather-indicator-label">УФ-Индекс</div>
-            <div class="weather-indicator-value">2 <span class="weather-badge weather-badge-low">Низкий</span></div>
-            <div class="weather-indicator-sub">Защита не требуется</div>
+            <div class="weather-indicator-value">{{ weather.uvIndex != null ? weather.uvIndex : 'PRO API' }} <span v-if="weather.uvIndex != null" class="weather-badge" :class="(weather.uvIndex || 0) > 5 ? 'weather-badge-high' : 'weather-badge-low'">{{ (weather.uvIndex || 0) > 5 ? 'Высокий' : 'Низкий' }}</span></div>
+            <div class="weather-indicator-sub">{{ weather.uvIndex != null ? ((weather.uvIndex || 0) > 5 ? 'Требуется защита' : 'Защита не требуется') : 'Недоступно по тарифу' }}</div>
           </div>
         </div>
         <div class="weather-indicator-card">
@@ -263,7 +282,62 @@ const fieldsWithWeather = computed(() => {
           <div>
             <div class="weather-indicator-label">Солнце</div>
             <div class="weather-indicator-value weather-indicator-value-sm"><span>Восход: {{ weather.sunrise || '—' }}</span><br><span>Закат: {{ weather.sunset || '—' }}</span></div>
-            <div class="weather-indicator-sub">День: ~12ч</div>
+            <div class="weather-indicator-sub">Световой день: {{ daylightDuration }}</div>
+          </div>
+        </div>
+        
+        <div class="weather-indicator-card">
+          <div class="weather-indicator-icon weather-icon-soil" style="color: #8B4513; background: rgba(139,69,19,0.15)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" /></svg>
+          </div>
+          <div>
+            <div class="weather-indicator-label">Темп. почвы</div>
+            <div class="weather-indicator-value">{{ weather.soilTemperature != null ? weather.soilTemperature : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.soilTemperature != null">°C</span></div>
+            <div class="weather-indicator-sub">{{ weather.soilTemperature != null ? 'Слой: 10 см' : 'Недоступно по тарифу' }}</div>
+          </div>
+        </div>
+        
+        <div class="weather-indicator-card">
+          <div class="weather-indicator-icon weather-icon-moisture" style="color: #20B2AA; background: rgba(32,178,170,0.15)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22a5 5 0 0 0 5-5c0-2-5-10-5-10S7 15 7 17a5 5 0 0 0 5 5z" /></svg>
+          </div>
+          <div>
+            <div class="weather-indicator-label">Влажн. почвы</div>
+            <div class="weather-indicator-value">{{ weather.soilMoisture != null ? weather.soilMoisture : 'PRO API' }}</div>
+            <div class="weather-indicator-sub">{{ weather.soilMoisture != null ? 'Доля влаги' : 'Недоступно по тарифу' }}</div>
+          </div>
+        </div>
+
+        <div class="weather-indicator-card">
+          <div class="weather-indicator-icon weather-icon-leaf" style="color: #4ade80; background: rgba(74,222,128,0.15)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/></svg>
+          </div>
+          <div>
+            <div class="weather-indicator-label">Листья</div>
+            <div class="weather-indicator-value">{{ weather.leafWetnessIndex != null ? (weather.leafWetnessIndex ? 'Мокрые' : 'Сухие') : 'PRO API' }}</div>
+            <div class="weather-indicator-sub">{{ weather.leafWetnessIndex != null ? 'Риск болезней' : 'Недоступно по тарифу' }}</div>
+          </div>
+        </div>
+
+        <div class="weather-indicator-card">
+          <div class="weather-indicator-icon weather-icon-kp" style="color: #9333ea; background: rgba(147,51,234,0.15)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          </div>
+          <div>
+            <div class="weather-indicator-label">Магнитные бури</div>
+            <div class="weather-indicator-value">{{ weather.kpIndex != null ? weather.kpIndex : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.kpIndex != null"> Kp</span></div>
+            <div class="weather-indicator-sub">{{ weather.kpIndex != null ? (weather.kpIndex >= 4 ? 'Сбои навигации RTK' : 'Фон спокойный') : 'Недоступно по тарифу' }}</div>
+          </div>
+        </div>
+
+        <div class="weather-indicator-card">
+          <div class="weather-indicator-icon weather-icon-dew" style="color: #2563eb; background: rgba(37,99,235,0.15)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7l-3.3 3.3a4.67 4.67 0 0 0 0 6.6 4.67 4.67 0 0 0 6.6 0 4.67 4.67 0 0 0 0-6.6Z"/></svg>
+          </div>
+          <div>
+            <div class="weather-indicator-label">Точка росы</div>
+            <div class="weather-indicator-value">{{ weather.dewPoint != null ? weather.dewPoint : 'PRO API' }}<span class="weather-indicator-muted" v-if="weather.dewPoint != null">°C</span></div>
+            <div class="weather-indicator-sub">{{ weather.dewPoint != null ? 'Риск конденсата' : 'Недоступно по тарифу' }}</div>
           </div>
         </div>
       </div>
@@ -284,6 +358,21 @@ const fieldsWithWeather = computed(() => {
             <span class="weather-forecast-temp-low">{{ day.tempMin }}°</span>
           </div>
           <div v-if="day.alert" class="weather-forecast-alert">{{ day.alert }}</div>
+        </div>
+      </div>
+
+      <!-- Карта -->
+      <h2 class="weather-section-title page-enter-item" style="--enter-delay: 360ms">Карта наблюдения</h2>
+      <div class="page-enter-item" style="--enter-delay: 400ms">
+        <YandexMap
+          :lat="weather.coord?.lat ?? 55.7558"
+          :lon="weather.coord?.lon ?? 37.6176"
+          :zoom="10"
+          @pick="(c) => pickedCoords = c"
+        />
+        <div v-if="pickedCoords" class="ymap-picked-coords">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+          Выбрана точка: <strong>{{ pickedCoords.lat.toFixed(5) }}° N, {{ pickedCoords.lon.toFixed(5) }}° E</strong>
         </div>
       </div>
 
@@ -860,5 +949,18 @@ const fieldsWithWeather = computed(() => {
     flex: 1;
     min-width: 0;
   }
+}
+
+.ymap-picked-coords {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 8px 14px;
+  background: var(--chip-bg);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
 }
 </style>
