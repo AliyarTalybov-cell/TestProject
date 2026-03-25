@@ -1,7 +1,11 @@
 {
   "rewrites": [
     {
-      "source": "/((?!api/.*).*)",
+      "source": "/yandex-api-v2/:path*",
+      "destination": "https://api.weather.yandex.ru/:path*"
+    },
+    {
+      "source": "/((?!yandex-api-v2).*)",
       "destination": "/index.html"
     }
   ]
