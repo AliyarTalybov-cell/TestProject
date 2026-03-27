@@ -518,7 +518,7 @@ function equipmentUsageLabel(eqId: string): 'work' | 'idle' {
   return 'idle'
 }
 
-function equipmentConditionBadge(eq: EquipmentRow): { text: string; tone: 'ok' | 'warn' | 'muted' } {
+function equipmentConditionBadge(eq: EquipmentRow): { text: string; tone: 'ok' | 'warn' | 'muted' | 'active' } {
   if (eq.condition === 'repair') {
     return { text: 'В ремонте', tone: 'warn' }
   }
@@ -526,13 +526,102 @@ function equipmentConditionBadge(eq: EquipmentRow): { text: string; tone: 'ok' |
     return { text: 'Выведена', tone: 'muted' }
   }
   if (equipmentUsageLabel(eq.id) === 'work') {
-    return { text: 'В работе', tone: 'ok' }
+    return { text: 'В работе', tone: 'active' }
   }
   return { text: 'Исправна', tone: 'ok' }
 }
 
+function equipmentRowSortPriority(tone: 'ok' | 'warn' | 'muted' | 'active'): number {
+  if (tone === 'active') return 0
+  if (tone === 'warn') return 1
+  if (tone === 'muted') return 2
+  return 3
+}
+
+/** Последние замеры топлива и состояния из завершённых операций (по дате окончания). */
+type EquipmentLastOpMetrics = {
+  fuelPct: number | null
+  conditionPct: number | null
+  conditionLabel: string | null
+  /** Время окончания операции, по которой взяты замеры (для сортировки «по взаимодействию»). */
+  lastEndedAtMs: number
+}
+
+const latestEquipmentOpMetrics = computed(() => {
+  const m = new Map<string, EquipmentLastOpMetrics>()
+  const sorted = [...operations.value]
+    .filter((o) => o.equipmentId)
+    .sort((a, b) => new Date(b.endISO).getTime() - new Date(a.endISO).getTime())
+  for (const o of sorted) {
+    const id = o.equipmentId as string
+    if (m.has(id)) continue
+    const left = o.equipmentFuelLeftPercent
+    const start = o.equipmentFuelPercent
+    let fuelPct: number | null = null
+    if (left != null && !Number.isNaN(Number(left))) fuelPct = Math.round(Number(left))
+    else if (start != null && !Number.isNaN(Number(start))) fuelPct = Math.round(Number(start))
+    const cv = o.equipmentConditionValue
+    const conditionPct =
+      cv != null && !Number.isNaN(Number(cv)) ? Math.round(Number(cv)) : null
+    const endMs = new Date(o.endISO).getTime()
+    m.set(id, {
+      fuelPct,
+      conditionPct,
+      conditionLabel: o.equipmentConditionLabel?.trim() || null,
+      lastEndedAtMs: Number.isNaN(endMs) ? 0 : endMs,
+    })
+  }
+  return m
+})
+
+/** Для сортировки: «в работе» — по последней активности статуса; иначе — по последней завершённой операции. */
+function equipmentInteractionTimestampMs(
+  eqId: string,
+  badgeTone: 'ok' | 'warn' | 'muted' | 'active',
+  metrics: EquipmentLastOpMetrics | undefined,
+): number {
+  if (badgeTone === 'active') {
+    let best = 0
+    for (const s of operatorStatuses.value) {
+      if (s.equipment_id !== eqId || s.kind !== 'operation') continue
+      const st = new Date(s.started_at).getTime()
+      if (!Number.isNaN(st)) best = Math.max(best, st)
+      if (s.updated_at) {
+        const u = new Date(s.updated_at).getTime()
+        if (!Number.isNaN(u)) best = Math.max(best, u)
+      }
+    }
+    return best
+  }
+  return metrics?.lastEndedAtMs ?? 0
+}
+
+function equipmentCatalogStateLabel(eq: EquipmentRow): string {
+  if (eq.condition === 'repair') return 'В ремонте'
+  if (eq.condition === 'decommissioned') return 'Выведена'
+  return 'Исправна'
+}
+
+function equipmentDashFuelText(metrics: EquipmentLastOpMetrics | undefined): string {
+  if (metrics?.fuelPct != null) return `${metrics.fuelPct}%`
+  return '—'
+}
+
+function equipmentDashStateText(eq: EquipmentRow, metrics: EquipmentLastOpMetrics | undefined): string {
+  if (metrics?.conditionLabel) return metrics.conditionLabel
+  if (metrics?.conditionPct != null) return `${metrics.conditionPct}%`
+  return equipmentCatalogStateLabel(eq)
+}
+
+function equipmentDashFuelBarClass(pct: number): string {
+  if (pct < 34) return 'dash-eq-fuel-fill--low'
+  if (pct < 67) return 'dash-eq-fuel-fill--mid'
+  return 'dash-eq-fuel-fill--high'
+}
+
 const equipmentRows = computed(() => {
-  return equipmentList.value.slice(0, 20).map((eq) => {
+  const metricsMap = latestEquipmentOpMetrics.value
+  const rows = equipmentList.value.map((eq) => {
     let operatorName = '—'
     for (const s of operatorStatuses.value) {
       if (s.equipment_id === eq.id && s.kind === 'operation') {
@@ -541,8 +630,21 @@ const equipmentRows = computed(() => {
       }
     }
     const badge = equipmentConditionBadge(eq)
-    return { eq, operatorName, badge }
+    const metrics = metricsMap.get(eq.id)
+    return { eq, operatorName, badge, metrics }
   })
+  rows.sort((a, b) => {
+    const pa = equipmentRowSortPriority(a.badge.tone)
+    const pb = equipmentRowSortPriority(b.badge.tone)
+    if (pa !== pb) return pa - pb
+    const ta = equipmentInteractionTimestampMs(a.eq.id, a.badge.tone, a.metrics)
+    const tb = equipmentInteractionTimestampMs(b.eq.id, b.badge.tone, b.metrics)
+    if (tb !== ta) return tb - ta
+    const na = `${a.eq.brand} ${a.eq.model || a.eq.license_plate}`.trim()
+    const nb = `${b.eq.brand} ${b.eq.model || b.eq.license_plate}`.trim()
+    return na.localeCompare(nb, 'ru')
+  })
+  return rows
 })
 
 async function loadDashboard() {
@@ -903,12 +1005,14 @@ onUnmounted(() => {
         <div class="dash-panel-head">
           <h2 class="dash-panel-title">Статус техники</h2>
           <div class="dash-legend-inline">
-            <span><i class="dot dot--g" /> В работе</span>
-            <span><i class="dot dot--n" /> Свободна</span>
+            <span><i class="dot dot--b" /> В работе</span>
+            <span><i class="dot dot--g" /> Исправна</span>
+            <span><i class="dot dot--r" /> В ремонте</span>
           </div>
         </div>
-        <ul class="dash-eq-list">
-          <li v-for="{ eq, operatorName, badge } in equipmentRows" :key="eq.id" class="dash-eq-item">
+        <div class="dash-eq-list-scroll">
+          <ul class="dash-eq-list">
+            <li v-for="{ eq, operatorName, badge, metrics } in equipmentRows" :key="eq.id" class="dash-eq-item">
             <RouterLink :to="{ name: 'equipment-details', params: { id: eq.id } }" class="dash-eq-link">
               <div class="dash-eq-body">
                 <div class="dash-eq-title">{{ eq.brand }} {{ eq.model || eq.license_plate }}</div>
@@ -916,12 +1020,34 @@ onUnmounted(() => {
                   <code class="dash-mono">{{ eq.license_plate }}</code>
                   <span>{{ operatorName }}</span>
                 </div>
+                <div class="dash-eq-metrics">
+                  <div class="dash-eq-metric-row">
+                    <span class="dash-eq-metric-label">Топливо</span>
+                    <div class="dash-eq-fuel">
+                      <div v-if="metrics?.fuelPct != null" class="dash-eq-fuel-track">
+                        <div
+                          class="dash-eq-fuel-fill"
+                          :class="equipmentDashFuelBarClass(metrics.fuelPct)"
+                          :style="{
+                            width: `${Math.min(100, Math.max(0, metrics.fuelPct))}%`,
+                          }"
+                        />
+                      </div>
+                      <span class="dash-eq-metric-val">{{ equipmentDashFuelText(metrics) }}</span>
+                    </div>
+                  </div>
+                  <div class="dash-eq-metric-row">
+                    <span class="dash-eq-metric-label">Состояние</span>
+                    <span class="dash-eq-metric-val">{{ equipmentDashStateText(eq, metrics) }}</span>
+                  </div>
+                </div>
                 <p v-if="eq.condition === 'repair' && eq.notes" class="dash-eq-note">{{ eq.notes }}</p>
               </div>
             </RouterLink>
             <span class="dash-eq-badge" :class="`dash-eq-badge--${badge.tone}`">{{ badge.text }}</span>
           </li>
-        </ul>
+          </ul>
+        </div>
         <p v-if="!equipmentRows.length" class="dash-empty">Техника не заведена в справочнике.</p>
       </div>
     </div>
@@ -1540,6 +1666,12 @@ onUnmounted(() => {
 .dot--g {
   background: #22c55e;
 }
+.dot--b {
+  background: #2563eb;
+}
+.dot--r {
+  background: #dc2626;
+}
 .dot--n {
   background: #94a3b8;
 }
@@ -1627,6 +1759,22 @@ onUnmounted(() => {
   margin: 0;
 }
 
+/* Видно примерно 4 карточки; остальные — прокрутка колёсиком / свайп на тачскрине */
+.dash-eq-list-scroll {
+  max-height: min(28rem, 48vh);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-panel);
+}
+
+.dash-eq-list-scroll .dash-eq-item:last-child {
+  border-bottom: none;
+}
+
 .dash-eq-list {
   list-style: none;
   margin: 0;
@@ -1692,6 +1840,72 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.dash-eq-metrics {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.72rem;
+}
+
+.dash-eq-metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dash-eq-metric-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dash-eq-metric-val {
+  color: var(--text-primary);
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+}
+
+.dash-eq-fuel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.dash-eq-fuel-track {
+  flex: 1;
+  max-width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  overflow: hidden;
+}
+
+.dash-eq-fuel-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.dash-eq-fuel-fill--low {
+  background: #dc2626;
+}
+
+.dash-eq-fuel-fill--mid {
+  background: #ca8a04;
+}
+
+.dash-eq-fuel-fill--high {
+  background: #16a34a;
+}
+
 .dash-mono {
   font-family: ui-monospace, monospace;
   background: var(--chip-bg);
@@ -1716,6 +1930,10 @@ onUnmounted(() => {
 .dash-eq-badge--ok {
   background: rgba(34, 197, 94, 0.15);
   color: #15803d;
+}
+.dash-eq-badge--active {
+  background: rgba(59, 130, 246, 0.18);
+  color: #1d4ed8;
 }
 .dash-eq-badge--warn {
   background: rgba(239, 68, 68, 0.15);
