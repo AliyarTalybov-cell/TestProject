@@ -161,6 +161,15 @@ function fieldDetailLinkForStatus(st: OperatorStatusRow | undefined): string | n
   return resolveFieldRouteId(st.field_id, st.field_name)
 }
 
+function displayFieldLabelForStatus(st: OperatorStatusRow): string {
+  const id = resolveFieldRouteId(st.field_id, st.field_name)
+  if (id) {
+    const f = fieldsCatalog.value.find((x) => x.id === id)
+    if (f) return `Поле №${f.number} — ${f.name}`
+  }
+  return st.field_name?.trim() || 'Поле'
+}
+
 const profilesForEmployeeFilter = computed(() =>
   [...profiles.value].sort((a, b) => {
     const na = (a.display_name || a.email).toLowerCase()
@@ -437,31 +446,6 @@ const taskEmployeeBarChart = computed(() => {
   return { rows, yTop, yTicks }
 })
 
-function taskProgressPercent(status: TaskStatus): number {
-  if (status === 'done') return 100
-  if (status === 'review') return 82
-  if (status === 'in_progress') return 52
-  return 8
-}
-
-const activeFieldsRows = computed(() => {
-  return tasks.value
-    .filter((t) => {
-      if (selectedEmployeeId.value && t.assignee_id !== selectedEmployeeId.value) return false
-      return t.status === 'in_progress' || t.status === 'review' || t.status === 'todo'
-    })
-    .slice(0, 12)
-    .map((t) => {
-      const assignee = profileById.value.get(t.assignee_id)
-      return {
-        task: t,
-        assigneeName: assignee ? assignee.display_name || assignee.email : '—',
-        progress: taskProgressPercent(t.status),
-        fieldDetailId: resolveFieldIdByTaskField(t.field),
-      }
-    })
-})
-
 function categoryLabelRu(cat: string | null | undefined): string {
   const c = (cat || '').toLowerCase()
   if (c === 'breakdown') return 'Поломка техники'
@@ -500,6 +484,32 @@ function shiftProgressForUser(userId: string): number {
   const target = 8 * 60
   return Math.min(100, Math.round((minutes / target) * 100))
 }
+
+/** Активные поля: только строки operator_status с реальной операцией на поле (не задачи из календаря). */
+const activeFieldsRows = computed(() => {
+  const rows = operatorStatuses.value.filter((s) => {
+    if (s.kind !== 'operation') return false
+    if (selectedEmployeeId.value && s.user_id !== selectedEmployeeId.value) return false
+    const hasField = !!(s.field_id?.trim() || s.field_name?.trim())
+    return hasField
+  })
+  return [...rows]
+    .sort((a, b) => {
+      const la = displayFieldLabelForStatus(a)
+      const lb = displayFieldLabelForStatus(b)
+      const cmp = la.localeCompare(lb, 'ru')
+      if (cmp !== 0) return cmp
+      return a.employee.localeCompare(b.employee, 'ru')
+    })
+    .slice(0, 24)
+    .map((st) => ({
+      st,
+      fieldLabel: displayFieldLabelForStatus(st),
+      fieldDetailId: resolveFieldRouteId(st.field_id, st.field_name),
+      assigneeName: st.employee?.trim() || '—',
+      progress: shiftProgressForUser(st.user_id),
+    }))
+})
 
 function equipmentUsageLabel(eqId: string): 'work' | 'idle' {
   for (const s of operatorStatuses.value) {
@@ -658,13 +668,6 @@ onUnmounted(() => {
 
     <div class="dash-kpis page-enter-item" style="--enter-delay: 80ms">
       <div class="dash-kpi">
-        <div class="dash-kpi-icon dash-kpi-icon--people">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-          </svg>
-        </div>
         <div>
           <p class="dash-kpi-label">Люди в полях</p>
           <div class="dash-kpi-value-row">
@@ -674,13 +677,6 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="dash-kpi">
-        <div class="dash-kpi-icon dash-kpi-icon--tractor">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 7h13l5 5v5a2 2 0 0 1-2 2H7a4 4 0 0 1-4-4V7z" />
-            <path d="M16 7v5h5" />
-            <circle cx="7" cy="18" r="2" />
-          </svg>
-        </div>
         <div>
           <p class="dash-kpi-label">Техника в работе</p>
           <div class="dash-kpi-value-row">
@@ -690,12 +686,6 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="dash-kpi">
-        <div class="dash-kpi-icon dash-kpi-icon--alert">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v4M12 16h.01" />
-          </svg>
-        </div>
         <div>
           <p class="dash-kpi-label">Простои (период)</p>
           <div class="dash-kpi-value-row">
@@ -711,12 +701,6 @@ onUnmounted(() => {
         class="dash-kpi dash-kpi--click"
         :to="{ name: 'task-management', query: tasksKpiLinkQuery }"
       >
-        <div class="dash-kpi-icon dash-kpi-icon--tasks">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M9 11l3 3L22 4" />
-            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-          </svg>
-        </div>
         <div>
           <p class="dash-kpi-label">{{ tasksKpiTitle }}</p>
           <p class="dash-kpi-sublabel">{{ tasksKpiRangeHint }}</p>
@@ -775,11 +759,11 @@ onUnmounted(() => {
               :to="{ name: 'field-details', params: { id: fieldDetailLinkForStatus(statusByUserId.get(p.id))! } }"
               class="dash-live-box dash-live-box--link"
             >
-              <div class="dash-live-box-meta">📍 {{ statusByUserId.get(p.id)?.field_name || 'Поле' }}</div>
+              <div class="dash-live-box-meta">{{ statusByUserId.get(p.id)?.field_name || 'Поле' }}</div>
               <div class="dash-live-box-title">{{ statusByUserId.get(p.id)?.operation || 'Операция' }}</div>
             </RouterLink>
             <div v-else class="dash-live-box">
-              <div class="dash-live-box-meta">📍 {{ statusByUserId.get(p.id)?.field_name || 'Поле' }}</div>
+              <div class="dash-live-box-meta">{{ statusByUserId.get(p.id)?.field_name || 'Поле' }}</div>
               <div class="dash-live-box-title">{{ statusByUserId.get(p.id)?.operation || 'Операция' }}</div>
             </div>
             <div class="dash-live-progress">
@@ -800,9 +784,9 @@ onUnmounted(() => {
                 :to="{ name: 'equipment-details', params: { id: statusByUserId.get(p.id)!.equipment_id! } }"
                 class="dash-inline-link"
               >
-                🚜 {{ equipmentTitle(statusByUserId.get(p.id)?.equipment_id) }}
+                {{ equipmentTitle(statusByUserId.get(p.id)?.equipment_id) }}
               </RouterLink>
-              <span v-else>🚜 {{ equipmentTitle(statusByUserId.get(p.id)?.equipment_id) }}</span>
+              <span v-else>{{ equipmentTitle(statusByUserId.get(p.id)?.equipment_id) }}</span>
               <span>🕐 {{ elapsedLabel(statusByUserId.get(p.id)!.started_at) }}</span>
             </div>
           </template>
@@ -835,9 +819,9 @@ onUnmounted(() => {
                 :to="{ name: 'field-details', params: { id: fieldDetailLinkForStatus(statusByUserId.get(p.id))! } }"
                 class="dash-inline-link"
               >
-                📍 {{ statusByUserId.get(p.id)?.field_name || 'База' }}
+                {{ statusByUserId.get(p.id)?.field_name || 'База' }}
               </RouterLink>
-              <span v-else>📍 {{ statusByUserId.get(p.id)?.field_name || 'База' }}</span>
+              <span v-else>{{ statusByUserId.get(p.id)?.field_name || 'База' }}</span>
             </div>
           </template>
 
@@ -869,7 +853,7 @@ onUnmounted(() => {
     <div class="dash-split page-enter-item" style="--enter-delay: 160ms">
       <div class="dash-panel">
         <div class="dash-panel-head">
-          <h2 class="dash-panel-title">🌾 Активные поля (по задачам)</h2>
+          <h2 class="dash-panel-title">Активные поля (по операциям)</h2>
           <RouterLink to="/fields" class="dash-panel-link">Все поля</RouterLink>
         </div>
         <div class="dash-table-wrap">
@@ -882,32 +866,28 @@ onUnmounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in activeFieldsRows" :key="row.task.id">
+              <tr v-for="row in activeFieldsRows" :key="row.st.user_id">
                 <td>
                   <RouterLink
                     v-if="row.fieldDetailId"
                     :to="{ name: 'field-details', params: { id: row.fieldDetailId } }"
                     class="dash-field-link"
                   >
-                    <div class="dash-td-main">{{ row.task.field }}</div>
+                    <div class="dash-td-main">{{ row.fieldLabel }}</div>
                   </RouterLink>
                   <template v-else>
-                    <div class="dash-td-main">{{ row.task.field }}</div>
+                    <div class="dash-td-main">{{ row.fieldLabel }}</div>
                   </template>
-                  <span class="dash-chip dash-chip--amber">{{ taskStatusLabels[row.task.status] }}</span>
+                  <span class="dash-chip dash-chip--green">В работе</span>
                 </td>
                 <td>
-                  <div>{{ row.task.title }}</div>
+                  <div>{{ row.st.operation || 'Операция' }}</div>
                   <div class="dash-td-sub">{{ row.assigneeName }}</div>
                 </td>
                 <td>
                   <div class="dash-pbar-wrap">
                     <div class="dash-pbar">
-                      <div
-                        class="dash-pbar-fill"
-                        :class="{ 'dash-pbar-fill--warn': row.task.status === 'todo' }"
-                        :style="{ width: `${row.progress}%` }"
-                      />
+                      <div class="dash-pbar-fill" :style="{ width: `${row.progress}%` }" />
                     </div>
                     <span>{{ row.progress }}%</span>
                   </div>
@@ -915,13 +895,13 @@ onUnmounted(() => {
               </tr>
             </tbody>
           </table>
-          <p v-if="!activeFieldsRows.length" class="dash-empty">Нет активных задач в работе.</p>
+          <p v-if="!activeFieldsRows.length" class="dash-empty">Нет активных операций на полях.</p>
         </div>
       </div>
 
       <div class="dash-panel">
         <div class="dash-panel-head">
-          <h2 class="dash-panel-title">🚜 Статус техники</h2>
+          <h2 class="dash-panel-title">Статус техники</h2>
           <div class="dash-legend-inline">
             <span><i class="dot dot--g" /> В работе</span>
             <span><i class="dot dot--n" /> Свободна</span>
@@ -930,9 +910,6 @@ onUnmounted(() => {
         <ul class="dash-eq-list">
           <li v-for="{ eq, operatorName, badge } in equipmentRows" :key="eq.id" class="dash-eq-item">
             <RouterLink :to="{ name: 'equipment-details', params: { id: eq.id } }" class="dash-eq-link">
-              <div class="dash-eq-icon" :class="{ 'dash-eq-icon--bad': eq.condition === 'repair' }">
-                <span>🚜</span>
-              </div>
               <div class="dash-eq-body">
                 <div class="dash-eq-title">{{ eq.brand }} {{ eq.model || eq.license_plate }}</div>
                 <div class="dash-eq-meta">
@@ -950,7 +927,7 @@ onUnmounted(() => {
     </div>
 
     <section class="dash-task-stats page-enter-item" style="--enter-delay: 200ms">
-      <h2 class="dash-section-title">📊 Статистика задач</h2>
+      <h2 class="dash-section-title">Статистика задач</h2>
       <div class="dash-charts">
         <div class="dash-chart-card">
           <h3 class="dash-chart-title">Распределение по статусам</h3>
@@ -1614,6 +1591,11 @@ onUnmounted(() => {
 .dash-chip--amber {
   background: rgba(245, 158, 11, 0.15);
   color: #b45309;
+}
+
+.dash-chip--green {
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
 }
 
 .dash-pbar-wrap {
