@@ -298,6 +298,68 @@ const filteredFields = computed(() => {
   })
 })
 
+type FieldsSortKey = 'name' | 'area' | 'crop' | 'land' | 'location' | 'responsible'
+
+const fieldsSortKey = ref<FieldsSortKey>('name')
+const fieldsSortDir = ref<'asc' | 'desc'>('asc')
+
+function toggleFieldsSort(key: FieldsSortKey) {
+  if (fieldsSortKey.value === key) {
+    fieldsSortDir.value = fieldsSortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    fieldsSortKey.value = key
+    fieldsSortDir.value = 'asc'
+  }
+}
+
+function fieldsAriaSort(key: FieldsSortKey): 'ascending' | 'descending' | 'none' {
+  if (fieldsSortKey.value !== key) return 'none'
+  return fieldsSortDir.value === 'asc' ? 'ascending' : 'descending'
+}
+
+function fieldsSortMark(key: FieldsSortKey): string {
+  if (fieldsSortKey.value !== key) return ''
+  return fieldsSortDir.value === 'asc' ? '↑' : '↓'
+}
+
+const sortedFilteredFields = computed(() => {
+  const list = [...filteredFields.value]
+  const dir = fieldsSortDir.value === 'asc' ? 1 : -1
+  const key = fieldsSortKey.value
+  list.sort((a, b) => {
+    let c = 0
+    switch (key) {
+      case 'name':
+        c = a.name.localeCompare(b.name, 'ru', { sensitivity: 'base' })
+        break
+      case 'area':
+        c = a.area - b.area
+        break
+      case 'crop':
+        c = a.cropName.localeCompare(b.cropName, 'ru', { sensitivity: 'base' })
+        break
+      case 'land':
+        c = a.landType.localeCompare(b.landType, 'ru', { sensitivity: 'base' })
+        break
+      case 'location':
+        c = (a.locationDescription || '').localeCompare(b.locationDescription || '', 'ru', {
+          sensitivity: 'base',
+        })
+        break
+      case 'responsible':
+        c = (a.responsiblePerson || '').localeCompare(b.responsiblePerson || '', 'ru', {
+          sensitivity: 'base',
+        })
+        break
+      default:
+        c = 0
+    }
+    if (c !== 0) return c * dir
+    return a.number - b.number
+  })
+  return list
+})
+
 const selectedFields = computed(() =>
   fields.value.filter((f) => multiSelectedIds.value.includes(f.id)),
 )
@@ -311,7 +373,7 @@ const totalFiltered = computed(() => filteredFields.value.length)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalFiltered.value / pageSize.value)))
 const paginatedFields = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return filteredFields.value.slice(start, start + pageSize.value)
+  return sortedFilteredFields.value.slice(start, start + pageSize.value)
 })
 
 const totalSelectedArea = computed(() =>
@@ -1168,18 +1230,72 @@ onMounted(async () => {
           <table class="fields-table" aria-label="Список полей">
             <thead>
               <tr>
-                <th scope="col" class="fields-th-name">
-                  <div class="fields-th-with-sort">Название <svg class="fields-th-sort" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 8l4-4 4 4M8 16l4 4 4-4"/></svg></div>
+                <th scope="col" class="fields-th-name" :aria-sort="fieldsAriaSort('name')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn"
+                    aria-label="Сортировать по названию"
+                    @click.stop="toggleFieldsSort('name')"
+                  >
+                    Название
+                    <span v-if="fieldsSortMark('name')" class="fields-th-sort-mark">{{ fieldsSortMark('name') }}</span>
+                  </button>
                 </th>
-                <th scope="col" class="fields-th-area">
-                  <div class="fields-th-with-sort">Площадь (га) <svg class="fields-th-sort" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 8l4-4 4 4M8 16l4 4 4-4"/></svg></div>
+                <th scope="col" class="fields-th-area" :aria-sort="fieldsAriaSort('area')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn fields-th-sort-btn--end"
+                    aria-label="Сортировать по площади"
+                    @click.stop="toggleFieldsSort('area')"
+                  >
+                    Площадь (га)
+                    <span v-if="fieldsSortMark('area')" class="fields-th-sort-mark">{{ fieldsSortMark('area') }}</span>
+                  </button>
                 </th>
-                <th scope="col" class="fields-th-crop">
-                  <div class="fields-th-with-sort">Культура <svg class="fields-th-sort" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 8l4-4 4 4M8 16l4 4 4-4"/></svg></div>
+                <th scope="col" class="fields-th-crop" :aria-sort="fieldsAriaSort('crop')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn"
+                    aria-label="Сортировать по культуре"
+                    @click.stop="toggleFieldsSort('crop')"
+                  >
+                    Культура
+                    <span v-if="fieldsSortMark('crop')" class="fields-th-sort-mark">{{ fieldsSortMark('crop') }}</span>
+                  </button>
                 </th>
-                <th scope="col" class="fields-th-land">Тип земли</th>
-                <th scope="col" class="fields-th-location">Описание</th>
-                <th scope="col" class="fields-th-responsible">Ответственный</th>
+                <th scope="col" class="fields-th-land" :aria-sort="fieldsAriaSort('land')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn"
+                    aria-label="Сортировать по типу земли"
+                    @click.stop="toggleFieldsSort('land')"
+                  >
+                    Тип земли
+                    <span v-if="fieldsSortMark('land')" class="fields-th-sort-mark">{{ fieldsSortMark('land') }}</span>
+                  </button>
+                </th>
+                <th scope="col" class="fields-th-location" :aria-sort="fieldsAriaSort('location')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn"
+                    aria-label="Сортировать по описанию места"
+                    @click.stop="toggleFieldsSort('location')"
+                  >
+                    Описание
+                    <span v-if="fieldsSortMark('location')" class="fields-th-sort-mark">{{ fieldsSortMark('location') }}</span>
+                  </button>
+                </th>
+                <th scope="col" class="fields-th-responsible" :aria-sort="fieldsAriaSort('responsible')">
+                  <button
+                    type="button"
+                    class="fields-th-sort-btn"
+                    aria-label="Сортировать по ответственному"
+                    @click.stop="toggleFieldsSort('responsible')"
+                  >
+                    Ответственный
+                    <span v-if="fieldsSortMark('responsible')" class="fields-th-sort-mark">{{ fieldsSortMark('responsible') }}</span>
+                  </button>
+                </th>
                 <th scope="col" class="fields-th-actions">Действия</th>
               </tr>
             </thead>
@@ -2096,15 +2212,51 @@ onMounted(async () => {
   letter-spacing: 0.05em;
   white-space: nowrap;
 }
-.fields-th-with-sort {
+.fields-th-sort-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  white-space: nowrap;
+  text-align: inherit;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
 }
-.fields-th-sort {
+
+.fields-th-sort-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+}
+
+.fields-th-sort-btn:focus-visible {
+  outline: 2px solid var(--accent-green);
+  outline-offset: 2px;
+}
+
+.fields-th-sort-btn--end {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.fields-th-sort-mark {
   flex-shrink: 0;
-  opacity: 0.7;
-  color: var(--text-secondary);
+  font-size: 0.92em;
+  font-weight: 800;
+  color: var(--accent-green);
+  line-height: 1;
 }
 .fields-th-name,
 .fields-td-name { min-width: 180px; }

@@ -50,6 +50,41 @@ function rowToTask(r: CalendarTaskRow): CalendarTask {
 }
 
 const auth = useAuth()
+const isManager = computed(() => auth.userRole.value === 'manager')
+
+/** Для руководителя: чей календарь показывать (uuid). Пустая строка → свой. */
+const managerCalendarUserId = ref('')
+
+const effectiveCalendarUserId = computed(() => {
+  const me = auth.user.value?.id
+  if (!me) return null
+  if (!isManager.value) return me
+  return managerCalendarUserId.value || me
+})
+
+const managerCalendarOptions = computed(() => {
+  const me = auth.user.value?.id
+  const map = new Map<string, string>()
+  if (me) {
+    const selfProfile = profiles.value.find((p) => p.id === me)
+    map.set(me, selfProfile ? profileLabel(selfProfile) : auth.user.value?.email ?? 'Я')
+  }
+  for (const p of profiles.value) {
+    if (!map.has(p.id)) map.set(p.id, profileLabel(p))
+  }
+  return [...map.entries()]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'ru'))
+})
+
+const calendarViewingOtherLabel = computed(() => {
+  if (!isManager.value || !auth.user.value?.id) return ''
+  const uid = effectiveCalendarUserId.value
+  if (!uid || uid === auth.user.value.id) return ''
+  const p = profileById(uid)
+  return p ? profileLabel(p) : ''
+})
+
 const today = new Date()
 const currentYear = ref(today.getFullYear())
 const currentMonth = ref(today.getMonth())
@@ -394,13 +429,14 @@ function nextMonth() {
 }
 
 async function loadTasksFromDb() {
-  if (!isSupabaseConfigured() || !auth.user.value) {
+  const uid = effectiveCalendarUserId.value
+  if (!isSupabaseConfigured() || !uid) {
     tasks.value = []
     return
   }
   tasksLoading.value = true
   try {
-    const rows = await loadCalendarTasks(auth.user.value.id)
+    const rows = await loadCalendarTasks(uid)
     tasks.value = rows.map(rowToTask)
   } catch {
     tasks.value = []
@@ -424,8 +460,28 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => [auth.user.value?.id, isManager.value] as const,
+  ([uid, mgr]) => {
+    if (!uid || !mgr) return
+    if (!managerCalendarUserId.value) managerCalendarUserId.value = uid
+  },
+  { immediate: true },
+)
+
+watch(
+  effectiveCalendarUserId,
+  (uid) => {
+    if (!uid) {
+      tasks.value = []
+      return
+    }
+    void loadTasksFromDb()
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
-  loadTasksFromDb()
   loadProfilesOnce()
 })
 
@@ -437,7 +493,8 @@ function openNewTaskModal() {
   taskStartTime.value = '09:00'
   taskEndTime.value = '11:30'
   taskPriority.value = 'normal'
-  taskAssignees.value = auth.user.value?.id ? [auth.user.value.id] : []
+  const owner = effectiveCalendarUserId.value
+  taskAssignees.value = owner ? [owner] : auth.user.value?.id ? [auth.user.value.id] : []
   taskFiles.value = []
   assigneePickerOpen.value = false
   isTaskModalOpen.value = true
@@ -538,7 +595,7 @@ async function onSubmitTask() {
       })
     } else {
       await insertCalendarTask({
-        user_id: auth.user.value?.id ?? null,
+        user_id: effectiveCalendarUserId.value ?? auth.user.value?.id ?? null,
         date,
         title,
         description: taskDescription.value.trim() || null,
@@ -618,9 +675,37 @@ async function confirmDeleteTask() {
 <template>
   <section class="calendar-page">
     <header class="calendar-header page-enter-item">
-      <div>
+      <div class="calendar-header-text">
         <div class="type-label">Календарь</div>
         <h1 class="page-title">Планирование дня</h1>
+        <div v-if="isManager" class="calendar-owner-card">
+          <div class="calendar-owner-label-row">
+            <span class="calendar-owner-icon" aria-hidden="true">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+            </span>
+            <label for="calendar-owner-select" class="calendar-owner-label">Сотрудник</label>
+          </div>
+          <div class="calendar-owner-select-shell">
+            <select
+              id="calendar-owner-select"
+              v-model="managerCalendarUserId"
+              class="calendar-owner-select"
+            >
+              <option v-for="opt in managerCalendarOptions" :key="opt.id" :value="opt.id">
+                {{ opt.label }}{{ opt.id === auth.user.value?.id ? ' (я)' : '' }}
+              </option>
+            </select>
+          </div>
+        </div>
+        <p v-if="calendarViewingOtherLabel" class="calendar-view-hint">
+          <span class="calendar-view-hint-eyebrow" aria-hidden="true">Режим руководителя</span>
+          Просмотр календаря: <strong>{{ calendarViewingOtherLabel }}</strong>
+        </p>
       </div>
       <button type="button" class="calendar-add-btn" @click="openNewTaskModal">
         <svg
@@ -1160,9 +1245,140 @@ async function confirmDeleteTask() {
 
 .calendar-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);
+}
+
+.calendar-header-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.calendar-owner-card {
+  margin-top: 16px;
+  max-width: 380px;
+  padding: 16px 18px 18px;
+  border-radius: 16px;
+  background: linear-gradient(
+    152deg,
+    rgba(61, 92, 64, 0.09) 0%,
+    rgba(255, 255, 255, 0.97) 42%,
+    #fff 100%
+  );
+  border: 1px solid rgba(61, 92, 64, 0.14);
+}
+
+.calendar-owner-label-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.calendar-owner-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, var(--agro) 0%, var(--agro-dark) 100%);
+  color: #fff;
+}
+
+.calendar-owner-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.calendar-owner-label {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--agro-dark);
+}
+
+.calendar-owner-select-shell {
+  position: relative;
+}
+
+.calendar-owner-select-shell::after {
+  content: '';
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--agro);
+  border-bottom: 2px solid var(--agro);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.calendar-owner-select {
+  width: 100%;
+  margin: 0;
+  padding: 13px 44px 13px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(61, 92, 64, 0.13);
+  background: #fff;
+  color: #1a2422;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1.3;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: border-color 0.2s ease;
+}
+
+.calendar-owner-select:hover {
+  border-color: rgba(61, 92, 64, 0.32);
+}
+
+.calendar-owner-select:focus {
+  outline: 2px solid var(--agro);
+  outline-offset: 2px;
+  border-color: var(--agro);
+}
+
+.calendar-owner-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.calendar-view-hint {
+  margin: 14px 0 0;
+  max-width: 380px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #5c6560);
+  line-height: 1.45;
+  background: rgba(61, 92, 64, 0.07);
+  border: 1px solid rgba(61, 92, 64, 0.12);
+}
+
+.calendar-view-hint-eyebrow {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--agro);
+  margin-bottom: 6px;
+  opacity: 0.9;
+}
+
+.calendar-view-hint strong {
+  color: var(--agro-dark);
+  font-weight: 700;
 }
 
 .calendar-add-btn {
@@ -1248,6 +1464,12 @@ async function confirmDeleteTask() {
   .calendar-header {
     flex-wrap: wrap;
     gap: var(--space-sm);
+  }
+
+  .calendar-owner-card,
+  .calendar-view-hint {
+    max-width: none;
+    width: 100%;
   }
 
   .calendar-add-btn {
@@ -3198,5 +3420,51 @@ async function confirmDeleteTask() {
   justify-content: flex-end;
   gap: 10px;
   overflow: visible;
+}
+</style>
+
+<style>
+html[data-theme='dark'] .calendar-page .calendar-owner-card {
+  background: linear-gradient(
+    152deg,
+    rgba(61, 92, 64, 0.22) 0%,
+    rgba(28, 32, 30, 0.96) 55%,
+    var(--bg-panel, #1c201e) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+html[data-theme='dark'] .calendar-page .calendar-owner-label {
+  color: color-mix(in srgb, #fff 88%, var(--agro));
+}
+
+html[data-theme='dark'] .calendar-page .calendar-owner-select {
+  background: rgba(0, 0, 0, 0.28);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary, #f3f4f3);
+}
+
+html[data-theme='dark'] .calendar-page .calendar-owner-select:hover {
+  border-color: rgba(61, 92, 64, 0.45);
+}
+
+html[data-theme='dark'] .calendar-page .calendar-owner-select:focus {
+  border-color: var(--agro);
+  outline-color: var(--agro);
+}
+
+html[data-theme='dark'] .calendar-page .calendar-owner-select-shell::after {
+  border-right-color: var(--agro-light, #4d7350);
+  border-bottom-color: var(--agro-light, #4d7350);
+}
+
+html[data-theme='dark'] .calendar-page .calendar-view-hint {
+  background: rgba(61, 92, 64, 0.15);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+}
+
+html[data-theme='dark'] .calendar-page .calendar-view-hint strong {
+  color: color-mix(in srgb, #fff 90%, var(--agro-light));
 }
 </style>
