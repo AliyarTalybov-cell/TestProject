@@ -36,6 +36,8 @@ import { loadProfiles, type ProfileRow } from '@/lib/tasksSupabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
 import UiSuccessModal from '@/components/UiSuccessModal.vue'
+import YandexMap from '@/components/YandexMap.vue'
+import { resolveYandexAddressLine } from '@/lib/yandexGeocode'
 
 type CropKey = 'all' | 'wheat' | 'corn' | 'soy' | 'sunflower' | 'none' | 'meadow'
 
@@ -369,6 +371,8 @@ const newFieldLocationDesc = ref('')
 const newFieldResponsibleId = ref('')
 const newFieldSchemeUrl = ref('')
 const newFieldSchemeFileName = ref('')
+const fieldMapAddressLoading = ref(false)
+const fieldMapAddressError = ref('')
 const schemePreviewObjectUrl = ref('') // временный URL для превью до завершения загрузки
 const schemeUploading = ref(false)
 const schemeUploadError = ref('')
@@ -381,6 +385,13 @@ const schemePreviewUrl = computed(() => newFieldSchemeUrl.value || schemePreview
 const isFieldModalOpen = computed(() => isAddFieldOpen.value)
 const fieldModalTitle = computed(() => (editingFieldId.value ? 'Редактирование поля' : 'Новое поле'))
 const fieldToDelete = computed(() => (deleteConfirmFieldId.value ? fields.value.find((f) => f.id === deleteConfirmFieldId.value) : null))
+const fieldMapCenter = computed(() => {
+  const raw = newFieldGeo.value.trim()
+  if (!raw) return { lat: 55.7558, lon: 37.6176 }
+  const parts = raw.split(',').map((p) => Number(p.trim()))
+  if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) return { lat: 55.7558, lon: 37.6176 }
+  return { lat: parts[0], lon: parts[1] }
+})
 
 const CROP_OPTIONS_FALLBACK: { key: string; label: string }[] = [
   { key: 'wheat', label: 'Пшеница' },
@@ -423,6 +434,8 @@ async function openAddField() {
   newFieldResponsibleId.value = ''
   newFieldSchemeUrl.value = ''
   newFieldSchemeFileName.value = ''
+  fieldMapAddressLoading.value = false
+  fieldMapAddressError.value = ''
   if (schemePreviewObjectUrl.value) {
     URL.revokeObjectURL(schemePreviewObjectUrl.value)
     schemePreviewObjectUrl.value = ''
@@ -456,6 +469,8 @@ async function openEditField(f: Field) {
   newFieldResponsibleId.value = f.responsibleId ?? ''
   newFieldSchemeUrl.value = f.schemeFileUrl
   newFieldSchemeFileName.value = f.schemeFileUrl ? new URL(f.schemeFileUrl).pathname.split('/').pop() || 'Схема' : ''
+  fieldMapAddressLoading.value = false
+  fieldMapAddressError.value = ''
   schemeUploadError.value = ''
   fieldFormError.value = ''
   isAddFieldOpen.value = true
@@ -550,6 +565,26 @@ async function processSchemeFile(file: File) {
 function closeFieldModal() {
   isAddFieldOpen.value = false
   editingFieldId.value = null
+  fieldMapAddressLoading.value = false
+  fieldMapAddressError.value = ''
+}
+
+async function onPickFieldMap(coords: { lat: number; lon: number }) {
+  const lat = Number(coords.lat.toFixed(6))
+  const lon = Number(coords.lon.toFixed(6))
+  newFieldGeo.value = `${lat}, ${lon}`
+  fieldMapAddressError.value = ''
+  fieldMapAddressLoading.value = true
+  try {
+    const address = await resolveYandexAddressLine(lat, lon)
+    if (address) {
+      newFieldAddress.value = address
+    } else {
+      fieldMapAddressError.value = 'Не удалось определить адрес по выбранной точке.'
+    }
+  } finally {
+    fieldMapAddressLoading.value = false
+  }
 }
 
 async function onResponsibleChange(fieldId: string, value: string) {
@@ -1596,6 +1631,25 @@ onMounted(async () => {
                   placeholder="Например: Московская обл., Раменский р-н, д. Вялки"
                 />
               </label>
+            </div>
+            <div class="modal-form-section">
+              <div class="modal-field modal-field--full">
+                <span class="modal-label">Карта участка</span>
+                <div class="field-map-picker-wrap">
+                  <YandexMap
+                    :key="editingFieldId ?? 'new-field'"
+                    :lat="fieldMapCenter.lat"
+                    :lon="fieldMapCenter.lon"
+                    :zoom="12"
+                    @pick="onPickFieldMap"
+                  />
+                </div>
+                <p class="field-map-picker-note">
+                  Нажмите на карту, чтобы автоматически заполнить геолокацию и адрес.
+                </p>
+                <p v-if="fieldMapAddressLoading" class="field-map-picker-status">Определяем адрес по координатам...</p>
+                <p v-else-if="fieldMapAddressError" class="field-map-picker-status field-map-picker-status--error">{{ fieldMapAddressError }}</p>
+              </div>
             </div>
             <div class="modal-form-section modal-form-section--grid modal-form-section--grid-4">
               <label class="modal-field">
@@ -3504,6 +3558,32 @@ onMounted(async () => {
 }
 [data-theme='dark'] .modal.modal-fields--add .modal-close:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.field-map-picker-wrap {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.field-map-picker-wrap :deep(.ymap-container) {
+  height: 280px;
+}
+
+.field-map-picker-note {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.field-map-picker-status {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.field-map-picker-status--error {
+  color: var(--warning-orange);
 }
 
 @media (max-width: 1024px) {

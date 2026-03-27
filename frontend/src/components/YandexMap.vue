@@ -5,10 +5,16 @@ const props = withDefaults(defineProps<{
   lat?: number
   lon?: number
   zoom?: number
+  /** false — только просмотр: без поиска и клика, сразу метка в центре */
+  interactive?: boolean
+  /** Текст подсказки/балуна у метки (например адрес поля) */
+  markerHint?: string
 }>(), {
   lat: 55.7558,
   lon: 37.6176,
   zoom: 10,
+  interactive: true,
+  markerHint: '',
 })
 
 const emit = defineEmits<{
@@ -40,35 +46,39 @@ async function initMap() {
       controls: ['zoomControl', 'fullscreenControl'],
     })
 
-    // Поиск по адресу
-    const searchControl = new ymaps.control.SearchControl({
-      options: {
-        provider: 'yandex#search',
-        noPlacemark: true // Мы сами ставим свой красный маркер
-      }
-    })
-    mapInstance.controls.add(searchControl)
+    if (props.interactive) {
+      // Поиск по адресу
+      const searchControl = new ymaps.control.SearchControl({
+        options: {
+          provider: 'yandex#search',
+          noPlacemark: true // Мы сами ставим свой красный маркер
+        }
+      })
+      mapInstance.controls.add(searchControl)
 
-    // Обработка выбора из поиска
-    searchControl.events.add('resultselect', (e: any) => {
-      const index = e.get('index')
-      searchControl.getResult(index).then((res: any) => {
-        const coords = res.geometry.getCoordinates()
-        const [lat, lon] = coords as [number, number]
-        console.log('Search result selected:', { lat, lon })
+      // Обработка выбора из поиска
+      searchControl.events.add('resultselect', (e: any) => {
+        const index = e.get('index')
+        searchControl.getResult(index).then((res: any) => {
+          const coords = res.geometry.getCoordinates()
+          const [lat, lon] = coords as [number, number]
+          console.log('Search result selected:', { lat, lon })
+          emit('pick', { lat, lon })
+          placeMark(lat, lon)
+        })
+      })
+
+      // Клик по карте
+      mapInstance.events.add('click', (e: any) => {
+        const coords: [number, number] = e.get('coords')
+        const [lat, lon] = coords
+        console.log('Yandex Maps click:', { lat, lon })
         emit('pick', { lat, lon })
         placeMark(lat, lon)
       })
-    })
-
-    // Клик по карте
-    mapInstance.events.add('click', (e: any) => {
-      const coords: [number, number] = e.get('coords')
-      const [lat, lon] = coords
-      console.log('Yandex Maps click:', { lat, lon })
-      emit('pick', { lat, lon })
-      placeMark(lat, lon)
-    })
+    } else {
+      placeMark(props.lat, props.lon)
+    }
   } catch (err) {
     console.error('YandexMap init error:', err)
   }
@@ -82,9 +92,10 @@ function placeMark(lat: number, lon: number) {
     placemark = null
   }
 
+  const hint = props.markerHint?.trim()
   placemark = new ymaps.Placemark(
     [lat, lon],
-    {},
+    hint ? { hintContent: hint, balloonContent: hint } : {},
     {
       preset: 'islands#redDotIcon',
       draggable: false,
@@ -94,11 +105,17 @@ function placeMark(lat: number, lon: number) {
   mapInstance.geoObjects.add(placemark)
 }
 
-watch([() => props.lat, () => props.lon], ([lat, lon]) => {
-  if (mapInstance) {
+watch(
+  [() => props.lat, () => props.lon, () => props.markerHint, () => props.interactive],
+  () => {
+    if (!mapInstance) return
+    const { lat, lon } = props
     mapInstance.setCenter([lat, lon], props.zoom, { duration: 500 })
-  }
-})
+    if (!props.interactive) {
+      placeMark(lat, lon)
+    }
+  },
+)
 
 onMounted(() => { void initMap() })
 
@@ -114,7 +131,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="ymap-wrapper">
     <div ref="mapEl" class="ymap-container" />
-    <div class="ymap-hint">
+    <div v-if="interactive" class="ymap-hint">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>
       </svg>

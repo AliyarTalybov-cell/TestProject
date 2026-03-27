@@ -18,6 +18,8 @@ import { loadOperationsByFieldFromSupabase, type FieldOperationHistoryRow } from
 import { isSupabaseConfigured } from '@/lib/supabase'
 import UiDeleteButton from '@/components/UiDeleteButton.vue'
 import UiLoadingBar from '@/components/UiLoadingBar.vue'
+import YandexMap from '@/components/YandexMap.vue'
+import { resolveYandexAddressLine, parseLatLonFromGeolocationString } from '@/lib/yandexGeocode'
 
 const props = defineProps<{ id: string }>()
 
@@ -52,6 +54,8 @@ const editForm = ref({
   scheme_file_url: '',
 })
 const schemeUploading = ref(false)
+const fieldMapAddressLoading = ref(false)
+const fieldMapAddressError = ref('')
 const historyLoading = ref(false)
 const history = ref<FieldOperationHistoryRow[]>([])
 const historyPage = ref(1)
@@ -59,6 +63,19 @@ const historyPageSize = ref(5)
 const historyTotal = ref(0)
 
 const isManager = computed(() => auth.userRole.value === 'manager')
+
+const fieldEditMapCenter = computed(() => {
+  return parseLatLonFromGeolocationString(editForm.value.geolocation) ?? { lat: 55.7558, lon: 37.6176 }
+})
+
+/** Карта в режиме просмотра: только при заполненных адресе и валидной геолокации */
+const fieldViewMapCoords = computed(() => {
+  if (!field.value) return null
+  const addr = ((field.value as { address?: string | null }).address ?? '').trim()
+  const geo = parseLatLonFromGeolocationString((field.value as { geolocation?: string | null }).geolocation)
+  if (!addr || !geo) return null
+  return geo
+})
 
 const responsibleName = computed(() => {
   if (!field.value?.responsible_id) return '—'
@@ -245,6 +262,8 @@ function goBack() {
 
 function startEditing() {
   if (!field.value) return
+  fieldMapAddressLoading.value = false
+  fieldMapAddressError.value = ''
   editForm.value = {
     name: field.value.name,
     area: Number(field.value.area),
@@ -266,6 +285,26 @@ function startEditing() {
 function cancelEditing() {
   isEditing.value = false
   saveError.value = null
+  fieldMapAddressLoading.value = false
+  fieldMapAddressError.value = ''
+}
+
+async function onPickFieldDetailsMap(coords: { lat: number; lon: number }) {
+  const lat = Number(coords.lat.toFixed(6))
+  const lon = Number(coords.lon.toFixed(6))
+  editForm.value.geolocation = `${lat}, ${lon}`
+  fieldMapAddressError.value = ''
+  fieldMapAddressLoading.value = true
+  try {
+    const address = await resolveYandexAddressLine(lat, lon)
+    if (address) {
+      editForm.value.address = address
+    } else {
+      fieldMapAddressError.value = 'Не удалось определить адрес по выбранной точке.'
+    }
+  } finally {
+    fieldMapAddressLoading.value = false
+  }
 }
 
 async function saveEditing() {
@@ -520,6 +559,22 @@ watch(
                 </p>
               </div>
             </div>
+            <div v-if="fieldViewMapCoords" class="field-details-view-map">
+              <div class="field-details-view-map-head">
+                <span class="field-details-view-map-title">Местоположение на карте</span>
+                <span class="field-details-view-map-coords" aria-hidden="true">
+                  {{ fieldViewMapCoords.lat.toFixed(6) }}, {{ fieldViewMapCoords.lon.toFixed(6) }}
+                </span>
+              </div>
+              <YandexMap
+                :key="'field-view-' + field.id"
+                :interactive="false"
+                :lat="fieldViewMapCoords.lat"
+                :lon="fieldViewMapCoords.lon"
+                :zoom="14"
+                :marker-hint="(field.address || '').trim()"
+              />
+            </div>
           </template>
 
           <form v-else class="field-details-edit-form" @submit.prevent="saveEditing">
@@ -541,6 +596,26 @@ watch(
                 <span class="field-details-edit-label">Адрес</span>
                 <input v-model="editForm.address" type="text" class="field-details-edit-input" placeholder="Адрес" />
               </label>
+              <div class="field-details-edit-field field-details-edit-field--full">
+                <span class="field-details-edit-label">Карта участка</span>
+                <div class="field-details-map-picker">
+                  <YandexMap
+                    :key="'field-edit-' + (field?.id ?? props.id)"
+                    :lat="fieldEditMapCenter.lat"
+                    :lon="fieldEditMapCenter.lon"
+                    :zoom="12"
+                    @pick="onPickFieldDetailsMap"
+                  />
+                </div>
+                <p class="field-details-map-hint">Нажмите на карту, чтобы заполнить геолокацию и адрес.</p>
+                <p v-if="fieldMapAddressLoading" class="field-details-map-status">Определяем адрес по координатам...</p>
+                <p
+                  v-else-if="fieldMapAddressError"
+                  class="field-details-map-status field-details-map-status--error"
+                >
+                  {{ fieldMapAddressError }}
+                </p>
+              </div>
               <label class="field-details-edit-field field-details-edit-field--full">
                 <span class="field-details-edit-label">Описание местоположения</span>
                 <textarea v-model="editForm.location_description" class="field-details-edit-textarea" rows="2" placeholder="Описание границ"></textarea>
@@ -959,6 +1034,55 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.field-details-map-picker {
+  border: 1px solid var(--topbar-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.field-details-map-picker :deep(.ymap-container) {
+  height: 280px;
+}
+.field-details-map-hint {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.field-details-map-status {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.field-details-map-status--error {
+  color: var(--warning-orange, #d97706);
+}
+.field-details-view-map {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--topbar-border);
+}
+.field-details-view-map-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.field-details-view-map-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.field-details-view-map-coords {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.field-details-view-map :deep(.ymap-container) {
+  height: 280px;
 }
 .field-details-edit-label {
   font-size: 0.8rem;
