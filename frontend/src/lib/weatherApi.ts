@@ -213,6 +213,7 @@ const GQL_FORECAST_QUERY = `
           }
         }
       }
+    }
   }
 `
 
@@ -232,6 +233,10 @@ export async function fetchForecast5(lat: number, lon: number): Promise<Forecast
 
     if (!response.ok) return []
     const result = await response.json()
+    if (result?.errors?.length) {
+      console.error('Forecast GraphQL response errors:', result.errors)
+      return []
+    }
     
     const days = result.data?.weatherByPoint?.forecast?.days || []
     
