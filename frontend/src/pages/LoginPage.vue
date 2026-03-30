@@ -65,6 +65,15 @@ async function submit() {
 
 <template>
   <div class="login-layout auth-uiview">
+    <img
+      class="login-bg-img"
+      src="/login-bg.jpg"
+      alt=""
+      width="1920"
+      height="1080"
+      decoding="async"
+      fetchpriority="high"
+    />
     <form class="form_container" @submit.prevent="submit">
       <div class="title_container">
         <p class="title">{{ title }}</p>
@@ -148,17 +157,24 @@ async function submit() {
   padding: 24px;
   box-sizing: border-box;
   background-color: #1c2e18;
-  background-image: url('/photo-1500382017468-9049fed747ef.jpeg');
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
+}
+
+.login-bg-img {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
 }
 
 .login-layout::before {
   content: '';
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 1;
   pointer-events: none;
   background: linear-gradient(
     135deg,
@@ -170,7 +186,7 @@ async function submit() {
 
 .form_container {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: fit-content;
   min-width: min(100%, 360px);
   max-width: 410px;
