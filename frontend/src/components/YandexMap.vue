@@ -22,6 +22,8 @@ const props = withDefaults(
     fieldMarkers?: MapFieldMarker[]
     /** Вместе с точкой погоды (lat/lon) подогнать вид так, чтобы были видны все поля */
     fitFieldMarkers?: boolean
+    /** Подсказка поверх карты; иначе текст выводите снаружи под картой */
+    overlayHint?: boolean
   }>(),
   {
     lat: 55.7558,
@@ -31,6 +33,7 @@ const props = withDefaults(
     markerHint: '',
     fieldMarkers: () => [],
     fitFieldMarkers: false,
+    overlayHint: false,
   },
 )
 
@@ -226,7 +229,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="ymap-wrapper">
     <div ref="mapEl" class="ymap-container" />
-    <div v-if="interactive" class="ymap-hint">
+    <div v-if="interactive && overlayHint" class="ymap-hint">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
         <circle cx="12" cy="10" r="3" />

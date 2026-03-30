@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { loadFields, type FieldRow } from '@/lib/fieldsSupabase'
 import { loadCrops, type CropRow } from '@/lib/landTypesAndCrops'
 import { isSupabaseConfigured } from '@/lib/supabase'
@@ -25,10 +25,59 @@ const crops = ref<CropRow[]>([])
 const loading = ref(true)
 const error = ref(false)
 const pickedCoords = ref<{ lat: number; lon: number } | null>(null)
+const pickedCoordsCopied = ref(false)
+let pickedCoordsCopiedTimer: ReturnType<typeof setTimeout> | null = null
+
+async function copyPickedCoords() {
+  const p = pickedCoords.value
+  if (!p) return
+  const text = `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    } catch {
+      return
+    }
+  }
+  pickedCoordsCopied.value = true
+  if (pickedCoordsCopiedTimer) clearTimeout(pickedCoordsCopiedTimer)
+  pickedCoordsCopiedTimer = setTimeout(() => {
+    pickedCoordsCopied.value = false
+    pickedCoordsCopiedTimer = null
+  }, 2000)
+}
 
 /** Погода по точке поля (ключ — id поля); null в значении = нет данных / ошибка */
 const fieldWeatherById = ref<Record<string, WeatherData | null>>({})
 const fieldsLocationWeatherLoading = ref(false)
+
+/** Как в таблице «Поля»: заголовок из name; иначе запасной вариант по number */
+function fieldDisplayTitle(f: FieldRow): string {
+  const n = (f.name ?? '').trim()
+  if (n) return n
+  if (f.number != null && Number.isFinite(Number(f.number))) return `Поле №${f.number}`
+  return 'Поле'
+}
+
+/** Тот же порядок, что при сортировке списка полей по колонке «Название» (как на FieldsPage). */
+function compareFieldsByNameThenNumber(a: FieldRow, b: FieldRow): number {
+  const c = (a.name ?? '')
+    .trim()
+    .localeCompare((b.name ?? '').trim(), 'ru', { sensitivity: 'base' })
+  if (c !== 0) return c
+  return Number(a.number) - Number(b.number)
+}
+
+const fieldsSortedForWeather = computed(() => [...fields.value].sort(compareFieldsByNameThenNumber))
 
 async function load() {
   loading.value = true
@@ -79,6 +128,10 @@ async function loadFieldsLocationWeather() {
 
 onMounted(() => {
   void Promise.all([load(), loadFieldsData()])
+})
+
+onBeforeUnmount(() => {
+  if (pickedCoordsCopiedTimer) clearTimeout(pickedCoordsCopiedTimer)
 })
 
 watch(fields, () => {
@@ -186,9 +239,9 @@ const fieldsWithWeather = computed(() => {
   const cityIcon = city?.icon ?? '01d'
   const loading = fieldsLocationWeatherLoading.value
 
-  return fields.value.map((f) => {
+  return fieldsSortedForWeather.value.map((f) => {
     const cropName = cropMap.get(f.crop_key) ?? f.crop_key ?? '—'
-    const fieldName = f.number ? `Поле №${f.number}` : f.name
+    const fieldName = fieldDisplayTitle(f)
     const coords = parseLatLonFromGeolocationString(f.geolocation)
     const hasAddress = (f.address ?? '').trim().length > 0
     const eligible = coords != null && hasAddress
@@ -264,10 +317,10 @@ const fieldsWithWeather = computed(() => {
 const weatherMapFieldMarkers = computed(() => {
   const cropMap = new Map(crops.value.map((c) => [c.key, c.label]))
   const result: { id: string; lat: number; lon: number; title: string; subtitle?: string }[] = []
-  for (const f of fields.value) {
+  for (const f of fieldsSortedForWeather.value) {
     const coords = parseLatLonFromGeolocationString(f.geolocation)
     if (!coords) continue
-    const title = f.number ? `Поле №${f.number}` : f.name
+    const title = fieldDisplayTitle(f)
     const cropName = cropMap.get(f.crop_key) ?? f.crop_key ?? ''
     const addr = (f.address ?? '').trim()
     const subtitle = [cropName, addr].filter(Boolean).join(' · ') || undefined
@@ -483,10 +536,6 @@ const weatherMapFieldMarkers = computed(() => {
 
       <!-- Карта -->
       <h2 class="weather-section-title page-enter-item" style="--enter-delay: 360ms">Карта наблюдения полей</h2>
-      <p class="weather-map-hint page-enter-item" style="--enter-delay: 375ms">
-        Зелёными метками на карте отмечены поля, заведённые в системе (по сохранённым координатам). Красная метка —
-        точка, которую вы выбрали на карте или в поиске.
-      </p>
       <div class="page-enter-item weather-map-wrap" style="--enter-delay: 400ms">
         <YandexMap
           :lat="weather.coord?.lat ?? 55.7558"
@@ -497,9 +546,30 @@ const weatherMapFieldMarkers = computed(() => {
           @pick="(c) => pickedCoords = c"
         />
         <div v-if="pickedCoords" class="ymap-picked-coords">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-          Выбрана точка: <strong>{{ pickedCoords.lat.toFixed(5) }}° N, {{ pickedCoords.lon.toFixed(5) }}° E</strong>
+          <div class="ymap-picked-coords-main">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span
+              >Выбрана точка:
+              <strong>{{ pickedCoords.lat.toFixed(5) }}° N, {{ pickedCoords.lon.toFixed(5) }}° E</strong></span
+            >
+          </div>
+          <button
+            type="button"
+            class="ymap-copy-coords-btn"
+            :title="pickedCoordsCopied ? 'Скопировано' : 'Копировать координаты'"
+            :aria-label="pickedCoordsCopied ? 'Скопировано в буфер' : 'Копировать координаты в буфер обмена'"
+            @click="copyPickedCoords"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+            </svg>
+          </button>
         </div>
+        <p class="weather-map-hint">
+          Зелёными метками на карте отмечены поля, заведённые в системе (по сохранённым координатам). Красная метка —
+          точка, которую вы выбрали на карте или в поиске.
+        </p>
       </div>
 
       <div class="weather-recommendations card-rounded weather-anim-card" style="--anim-delay: 450ms">
@@ -732,9 +802,15 @@ const weatherMapFieldMarkers = computed(() => {
   padding-top: 8px;
 }
 
+.weather-map-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .weather-map-hint {
-  margin: -2px 0 8px;
-  padding: 0 4px;
+  margin: 0;
+  padding: 0 2px;
   font-size: 0.8125rem;
   line-height: 1.45;
   color: var(--text-secondary);
@@ -746,16 +822,56 @@ const weatherMapFieldMarkers = computed(() => {
 }
 
 .ymap-picked-coords {
-  margin-top: 8px;
+  margin: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
   font-size: 0.8125rem;
   color: var(--text-secondary);
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: var(--chip-bg);
   border-radius: 8px;
   border: 1px solid var(--border-color);
+}
+
+.ymap-picked-coords-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ymap-copy-coords-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.ymap-copy-coords-btn:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+}
+
+.ymap-copy-coords-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-green) 50%, transparent);
+  outline-offset: 2px;
 }
 
 .header-weather {

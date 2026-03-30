@@ -481,9 +481,9 @@ watch(
 }
 
 .app-theme-cd-toggle:hover {
-  background: var(--sidebar-hover-bg);
+  background: transparent;
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--border-color) 50%, transparent);
+  border-color: transparent;
 }
 
 [data-theme='dark'] .app-theme-cd-toggle {
@@ -493,9 +493,9 @@ watch(
 }
 
 [data-theme='dark'] .app-theme-cd-toggle:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: transparent;
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: transparent;
 }
 
 .app-theme-cd-input {
