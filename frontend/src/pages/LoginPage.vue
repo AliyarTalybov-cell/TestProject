@@ -141,7 +141,11 @@ async function submit() {
         <span>{{ switchBtnLabel }}</span>
       </button>
 
-      <p class="note">Продолжая, вы принимаете правила использования корпоративного портала.</p>
+      <p class="note">
+        Продолжая, вы принимаете
+        <RouterLink class="note-link" to="/rules">правила</RouterLink>
+        использования корпоративного портала.
+      </p>
     </form>
   </div>
 </template>
@@ -393,6 +397,17 @@ async function submit() {
   text-decoration: none;
 }
 
+.note-link {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.note-link:hover {
+  color: #4b5563;
+}
+
 @media (max-width: 480px) {
   .login-layout {
     padding: 16px;
@@ -424,6 +439,10 @@ html[data-theme='dark'] .auth-uiview .separator,
 html[data-theme='dark'] .auth-uiview .note,
 html[data-theme='dark'] .auth-uiview .role_hint {
   color: var(--text-secondary);
+}
+
+html[data-theme='dark'] .auth-uiview .note-link:hover {
+  color: var(--text-primary);
 }
 
 html[data-theme='dark'] .auth-uiview .input_field {

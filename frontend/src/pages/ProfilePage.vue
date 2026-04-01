@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuth } from '@/stores/auth'
 import type { ProfileRow } from '@/lib/tasksSupabase'
 import { isSupabaseConfigured, ensureProfileRow, loadProfileById, upsertMyProfile } from '@/lib/tasksSupabase'
+import { deleteMyAccount } from '@/lib/accountSupabase'
+import { formatSupabaseError } from '@/lib/formatSupabaseError'
 
 const PROFILE_STORAGE_KEY = 'agro:profile'
 
@@ -16,6 +19,7 @@ const POSITIONS = [
 ]
 
 const auth = useAuth()
+const router = useRouter()
 const activeTab = ref<'personal' | 'security' | 'notifications'>('personal')
 
 const profileForm = ref({
@@ -241,6 +245,9 @@ const passwordForm = ref({
 })
 const passwordMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 const changingPassword = ref(false)
+const showDeleteAccountModal = ref(false)
+const deletingAccount = ref(false)
+const deleteAccountMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
 
 function setSaveMessage(type: 'success' | 'error', text: string) {
   if (saveMessageTimer) clearTimeout(saveMessageTimer)
@@ -336,6 +343,39 @@ async function changePassword() {
     passwordMessage.value = { type: 'error', text }
   } finally {
     changingPassword.value = false
+  }
+}
+
+function openDeleteAccountModal() {
+  deleteAccountMessage.value = null
+  showDeleteAccountModal.value = true
+}
+
+function closeDeleteAccountModal() {
+  if (deletingAccount.value) return
+  showDeleteAccountModal.value = false
+}
+
+async function confirmDeleteAccount() {
+  deletingAccount.value = true
+  deleteAccountMessage.value = null
+  try {
+    await deleteMyAccount()
+    try {
+      localStorage.removeItem(PROFILE_STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
+    try {
+      await auth.logout()
+    } catch {
+      /* пользователь уже удалён, signOut может завершиться ошибкой */
+    }
+    await router.replace('/login')
+  } catch (err) {
+    deleteAccountMessage.value = { type: 'error', text: formatSupabaseError(err) || 'Не удалось удалить аккаунт.' }
+  } finally {
+    deletingAccount.value = false
   }
 }
 </script>
@@ -526,6 +566,16 @@ async function changePassword() {
               </button>
             </div>
           </div>
+
+          <div class="profile-danger-zone">
+            <h3 class="profile-password-heading">Удаление аккаунта</h3>
+            <p class="profile-form-section-desc">
+              Аккаунт будет удалён без возможности восстановления. Связи с пользователем в задачах, полях и журналах будут очищены автоматически.
+            </p>
+            <button type="button" class="profile-btn profile-btn--danger" :disabled="deletingAccount" @click="openDeleteAccountModal">
+              {{ deletingAccount ? 'Удаление…' : 'Удалить аккаунт' }}
+            </button>
+          </div>
         </div>
 
         <div v-show="activeTab === 'notifications'" class="profile-tab-panel">
@@ -554,6 +604,31 @@ async function changePassword() {
         </button>
         <button type="button" class="profile-btn profile-btn--primary" :disabled="saving" @click="confirmSaveProfile">
           Да, сохранить
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div
+    v-if="showDeleteAccountModal"
+    class="profile-confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="profile-delete-title"
+    @click.self="closeDeleteAccountModal"
+  >
+    <div class="profile-confirm-modal profile-confirm-modal--danger">
+      <h2 id="profile-delete-title" class="profile-confirm-title">Удалить аккаунт?</h2>
+      <p class="profile-confirm-text">
+        Вы удалите свой профиль и вход в систему. Это действие необратимо.
+      </p>
+      <p v-if="deleteAccountMessage" class="profile-confirm-error">{{ deleteAccountMessage.text }}</p>
+      <div class="profile-confirm-actions">
+        <button type="button" class="profile-btn profile-btn--secondary" :disabled="deletingAccount" @click="closeDeleteAccountModal">
+          Отмена
+        </button>
+        <button type="button" class="profile-btn profile-btn--danger" :disabled="deletingAccount" @click="confirmDeleteAccount">
+          {{ deletingAccount ? 'Удаление…' : 'Да, удалить' }}
         </button>
       </div>
     </div>
@@ -971,6 +1046,17 @@ async function changePassword() {
   background: var(--border-color);
 }
 
+.profile-btn--danger {
+  background: color-mix(in srgb, var(--danger-red) 92%, #6e0f0f);
+  color: #fff;
+  border-color: color-mix(in srgb, var(--danger-red) 80%, #6e0f0f);
+}
+
+.profile-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger-red) 100%, #5f0d0d);
+  border-color: color-mix(in srgb, var(--danger-red) 95%, #5f0d0d);
+}
+
 [data-theme='dark'] .profile-btn--primary {
   color: #fff;
 }
@@ -1005,6 +1091,12 @@ async function changePassword() {
 
 .profile-password-section .profile-save-message {
   margin-bottom: var(--space-md);
+}
+
+.profile-danger-zone {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-lg);
+  border-top: 1px dashed var(--border-color);
 }
 
 [data-theme='dark'] .profile-page-title,
@@ -1044,6 +1136,10 @@ async function changePassword() {
   box-shadow: var(--shadow-card);
 }
 
+.profile-confirm-modal--danger {
+  border-color: color-mix(in srgb, var(--danger-red) 40%, var(--border-color));
+}
+
 [data-theme='dark'] .profile-confirm-modal {
   background: var(--bg-panel);
 }
@@ -1059,6 +1155,12 @@ async function changePassword() {
   margin: 0 0 var(--space-lg) 0;
   font-size: 0.9375rem;
   color: var(--text-secondary);
+}
+
+.profile-confirm-error {
+  margin: 0 0 var(--space-md) 0;
+  color: var(--danger-red);
+  font-size: 0.875rem;
 }
 
 .profile-confirm-actions {

@@ -14,12 +14,14 @@ import EquipmentDetailsPage from '@/pages/EquipmentDetailsPage.vue'
 import ProfilePage from '@/pages/ProfilePage.vue'
 import EmployeesPage from '@/pages/EmployeesPage.vue'
 import ChatPage from '@/pages/ChatPage.vue'
+import PortalRulesPage from '@/pages/PortalRulesPage.vue'
 import { getAuthUser, isAuthLoading } from '@/stores/auth'
 import { isSupabaseConfigured } from '@/lib/supabase'
 
 export const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/login', name: 'login', component: LoginPage, meta: { title: 'Вход', public: true } },
+  { path: '/rules', name: 'rules', component: PortalRulesPage, meta: { title: 'Правила портала', public: true, allowWhenAuth: true } },
   { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { title: 'Обзор' } },
   { path: '/weather', name: 'weather', component: WeatherPage, meta: { title: 'Погода и условия' } },
   { path: '/fields', name: 'fields', component: FieldsPage, meta: { title: 'Поля и Культуры' } },
@@ -49,7 +51,7 @@ router.beforeEach(async (to) => {
     waited += 50
   }
   const user = getAuthUser()
-  if (to.meta.public && user) return { name: 'dashboard' }
+  if (to.meta.public && user && !to.meta.allowWhenAuth) return { name: 'dashboard' }
   if (!to.meta.public && !user) return { name: 'login', query: { redirect: to.fullPath } }
   if (to.name === 'employees') {
     const role = (user?.user_metadata as { role?: string } | undefined)?.role

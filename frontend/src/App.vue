@@ -9,7 +9,7 @@ import { startActivityHeartbeat, stopActivityHeartbeat } from '@/lib/activityHea
 const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
-const isAuthLayout = computed(() => route.name === 'login')
+const isAuthLayout = computed(() => route.meta?.public === true)
 const pageTitle = computed(() => {
   if (route.name === 'dashboard' && route.query.tab === 'about') return 'О сервисе'
   return (route.meta?.title as string) || 'Обзор'
