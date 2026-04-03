@@ -2,10 +2,15 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+const frontendRoot = fileURLToPath(new URL('.', import.meta.url))
+
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd())
-  
+  // Всегда читаем .env из папки frontend (рядом с этим конфигом), а не из cwd процесса.
+  const env = loadEnv(mode, frontendRoot, '')
+
   return {
+    root: frontendRoot,
+    envDir: frontendRoot,
     plugins: [vue()],
     resolve: {
       alias: {
