@@ -127,7 +127,20 @@ function goAboutTab() {
             d="M 30.2223 21.2875 C 30.5674 21.2875 30.8471 21.0195 30.8471 20.6889 V 18.92 L 31.9916 18.9675 C 32.3376 18.9833 32.628 18.7259 32.643 18.3956 C 32.658 18.0654 32.3907 17.786 32.0459 17.7717 L 30.2495 17.6969 C 30.077 17.6889 29.9133 17.7497 29.7902 17.8624 C 29.6671 17.9753 29.5976 18.1315 29.5976 18.2948 V 20.6889 C 29.5974 21.0195 29.8772 21.2875 30.2223 21.2875 Z"
           />
         </svg>
-        <p class="dashboard-wip-caption" role="status">Страница в разработке</p>
+        <div class="dashboard-wip-callout" role="status" aria-live="polite">
+          <p class="dashboard-wip-caption">
+            Дальнейшая разработка сервиса перенесена на Портал агронома.
+          </p>
+          <a
+            class="dashboard-wip-link"
+            href="https://agro-project-hazel.vercel.app/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Перейти на портал
+          </a>
+          <p class="dashboard-wip-note">Следите за всеми обновлениями там.</p>
+        </div>
       </div>
     </section>
 
@@ -375,10 +388,79 @@ function goAboutTab() {
 
 .dashboard-wip-caption {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: 1.05rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
+  line-height: inherit;
+  color: var(--text-primary);
+}
+
+.dashboard-wip-callout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-family: inherit;
+  font-size: 1.05rem;
+  line-height: 1.45;
+  max-width: min(720px, 92vw);
+  padding: clamp(16px, 2.2vw, 24px);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 35%, var(--border-color));
+  border-radius: 14px;
+  background:
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--accent-green) 16%, transparent) 0%,
+      transparent 52%
+    ),
+    color-mix(in srgb, var(--bg-panel) 92%, var(--accent-green) 8%);
+  box-shadow:
+    0 12px 30px color-mix(in srgb, black 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 20%, transparent);
+}
+
+.dashboard-wip-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: inherit;
+  text-decoration: none;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent-green) 84%, var(--agri-primary)),
+    color-mix(in srgb, var(--agri-primary) 78%, var(--accent-green))
+  );
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-green) 25%, transparent);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease;
+}
+
+.dashboard-wip-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent-green) 30%, transparent);
+  filter: brightness(1.04);
+}
+
+.dashboard-wip-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-green) 55%, white);
+  outline-offset: 2px;
+}
+
+.dashboard-wip-note {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 500;
   color: var(--text-secondary);
+  line-height: inherit;
 }
 
 .dashboard-about-panel {
